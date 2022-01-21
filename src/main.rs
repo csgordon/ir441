@@ -99,10 +99,26 @@ pub fn parseReason(i: &[u8]) -> IResult<&[u8], Reason> {
     ))(i)
 }
 pub fn parseArgList(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
-    alt((|i| tuple((separated_list0(tuple((multispace0,tag(","),multispace0)),parseIRExpr),tag(")")))(i).map(|(rest,(v,_))| (rest,v) ),
+    alt((|i| tuple((tag(","),multispace0,separated_list0(tuple((multispace0,tag(","),multispace0)),parseIRExpr),multispace0,tag(")")))(i).map(|(rest,(_,_,v,_,_))| (rest,v) ),
          |i| tag(")")(i).map(|(rest,_)| (rest, Vec::new()))
     ))(i)
 }
+#[cfg(test)]
+mod TestParseArgList {
+    use crate::*;
+    #[test]
+    fn checkArgs() {
+        let empty : &[u8] = b"";
+        assert_eq!(parseArgList(")".as_bytes()), Ok((empty, vec![])));
+        assert_eq!(parseArgList(", 3)".as_bytes()), Ok((empty, vec![IRExpr::IntLit {val:3}])));
+        assert_eq!(parseArgList(", %v3, 3)".as_bytes()), Ok((empty, vec![IRExpr::Var { id: "v3"}, IRExpr::IntLit {val:3}])));
+        assert_eq!(
+            parseArgList(", %v3 , 3 )".as_bytes()).map(|(rest,r)| (from_utf8(rest).unwrap(),r)), 
+            Ok(("", vec![IRExpr::Var { id: "v3"}, IRExpr::IntLit {val:3}])));
+    }
+}
+
+
 pub fn parsePhiArgList(i: &[u8]) -> IResult<&[u8], Vec<(&str,IRExpr)>> {
     alt((|i| tuple((separated_list1(tuple((multispace0,tag(","),multispace0)),
                                     |x| tuple((identifier,tuple((multispace0,tag(","),multispace0)),parseIRExpr))(x).map(|(rest,(i,_,e))| (rest,(i,e)))
