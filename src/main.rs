@@ -137,14 +137,18 @@ mod TestParsePhiArgList {
         assert_eq!(parsePhiArgList("blah, 3, asdf, %v3)".as_bytes()), Ok((empty, vec![("blah",IRExpr::IntLit {val:3}), ("asdf",IRExpr::Var {id:"v3"})])));
         assert_eq!(parsePhiArgList("blah ,  3 )".as_bytes()), Ok((empty, vec![("blah",IRExpr::IntLit {val:3})])));
         assert_eq!(parsePhiArgList("blah ,  3  ,   asdf , %v3  )".as_bytes()), Ok((empty, vec![("blah",IRExpr::IntLit {val:3}), ("asdf",IRExpr::Var {id:"v3"})])));
+
+        assert_eq!(parsePhiArgList("bb1,%q,bb3,5)".as_bytes()), 
+                   Ok((empty, vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})])));
+        assert_eq!(parsePhiArgList("bb1 , %q , bb3 , 5 )".as_bytes()), 
+                   Ok((empty, vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})])));
     }
 }
 pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
+    // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i,_) = multispace0(i)?;
     alt((
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr,multispace1,parseOp,multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,tag("phi("),parsePhiArgList))(i).map(|(rest,(_,l,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
+        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,tag("phi("),multispace0,parsePhiArgList))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
         |i| tuple((tag("%"),
                    identifier,
                    tuple((multispace1,tag("="),multispace1)),
@@ -157,10 +161,44 @@ pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
             ))(i).map(|(rest,(_,l,_,_,cd,_,rcv,_,args))| (rest,Prim::Call { lhs: l, code: cd, receiver: rcv, args: args })),
         |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,tag("alloc("),digit1,tag(")")))(i).map(
             |(rest,(_,l,_,_,_,_,d,_))| (rest,Prim::Alloc { lhs: l, slots: from_utf8(d).unwrap().parse::<u32>().unwrap() })),
+        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr,multispace1,parseOp,multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
+        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
         // print, getelt, setelt, load, store
-        |i| tuple((tag("print("),parseIRExpr,tag(")")))(i).map(|(rest,(_,e,_))| (rest, Prim::Print { out: e})),
+        |i| tuple((tag("print("),multispace0,parseIRExpr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, Prim::Print { out: e})),
         |i| tuple((tag("fail"),multispace1,parseReason))(i).map(|(rest,(_,_,r))| (rest, Prim::Fail { reason: r}))
     ))(i)
+}
+pub fn parseIRStatements(i: &[u8]) -> IResult<&[u8], Vec<Prim>> {
+    separated_list1(tag("\n"), parseIRStatement)(i)
+}
+#[cfg(test)]
+mod TestParseIRStatement {
+    use crate::*;
+    #[test]
+    fn checkStatements() {
+        let empty : &[u8] = b"";
+        assert_eq!(parseIRStatement("print(3)".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parseIRStatement("print( 3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parseIRStatement("print(\t3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parseIRStatement("\t\tprint( 3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
+
+        assert_eq!(parseIRStatement("%v = 3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parseIRStatement("  %v  =   3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
+
+        assert_eq!(parseIRStatement("%v = phi(bb1,%q,bb3,5)".as_bytes()), 
+                   Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
+        assert_eq!(parseIRStatement("  %v  =   phi( bb1 , %q , bb3 , 5 )".as_bytes()), 
+                   Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
+
+        assert_eq!(parseIRStatement("%v = 3 + 4".as_bytes()), Ok((empty, Prim::Op { lhs: "v", arg1: IRExpr::IntLit { val : 3}, op: "+", arg2: IRExpr::IntLit { val:4}})));
+        assert_eq!(parseIRStatement("\t %v   =  %q   * 4".as_bytes()), Ok((empty, Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}})));
+
+
+        assert_eq!(parseIRStatements("\t %v   =  %q   * 4\nprint( %v )".as_bytes()), 
+            Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
+                            Prim::Print { out: IRExpr::Var { id: "v"}}
+            ])));
+    }
 }
 
 #[derive(Debug,PartialEq)]
