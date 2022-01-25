@@ -5,7 +5,7 @@ global array vtblB: { mB }
 global array fieldsB: { 0, 2 }
 code:
 
-mA(%this):
+mA(this):
   %1 = %this & 1
   if %1 then badptr else l2
 l2:
@@ -22,7 +22,7 @@ badptr:
 badfield:
   fail NoSuchField
 
-mB(%this):
+mB(this):
   ret 0
 
 main:
