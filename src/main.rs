@@ -174,7 +174,7 @@ pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
     ))(i)
 }
 pub fn parseIRStatements(i: &[u8]) -> IResult<&[u8], Vec<Prim>> {
-    separated_list1(tag("\n"), parseIRStatement)(i)
+    separated_list0(tag("\n"), parseIRStatement)(i)
 }
 #[cfg(test)]
 mod TestParseIRStatement {
@@ -302,8 +302,10 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
             let mut blocks = vec![];
             while let Ok((remaining2,b)) = last_block_parse {
                 println!("Parsed basic block:\n{:?}", &b);
+                println!("remaining text: {:?}", from_utf8(remaining2).unwrap());
                 blocks.push(b);
                 last_block_parse = parse_basic_block(remaining2);
+            println!("last_block_parse={:?}", &last_block_parse);
             }
             println!("last_block_parse={:?}", &last_block_parse);
             match last_block_parse.finish() {
