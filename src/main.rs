@@ -6,12 +6,12 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::collections::HashMap;
 use std::str::{from_utf8,FromStr};
-use nom::{IResult};
+use nom::{IResult,Finish};
 use nom::bytes::complete::{tag};
 use nom::branch::{alt};
-use nom::character::complete::{digit1,alpha1, multispace1, multispace0, alphanumeric1, none_of};
+use nom::character::complete::{digit1,alpha1,multispace1, multispace0,alphanumeric1, none_of};
 use nom::sequence::{delimited,tuple,pair};
-use nom::combinator::{recognize};
+use nom::combinator::{recognize,all_consuming};
 use nom::multi::{many0,many1,separated_list1,separated_list0};
 
 #[derive(Debug,PartialEq)]
@@ -48,11 +48,14 @@ pub fn parseOp(i: &[u8]) -> IResult<&[u8], &str> {
         tag("^")
     ))(i).map(|(rest,op)| (rest, from_utf8(op).unwrap()))
 }
+pub fn parse_register_name(i: &[u8]) -> IResult<&[u8], &str> {
+    alphanumeric1(i).map(|(rest,id)| (rest, from_utf8(id).unwrap()))
+}
 pub fn parseIRExpr(i: &[u8]) -> IResult<&[u8], IRExpr> {
     let (i,_) = multispace0(i)?;
     alt((
         |i| tuple((tag("@"),identifier))(i).map(|(rest,(_,id))| (rest,IRExpr::GlobalRef { name : id })),
-        |i| tuple((tag("%"),identifier))(i).map(|(rest,(_,id))| (rest,IRExpr::Var { id: id })),
+        |i| tuple((tag("%"),parse_register_name))(i).map(|(rest,(_,id))| (rest,IRExpr::Var { id: id })),
         |i| identifier(i).map(|(rest,id)| (rest,IRExpr::BlockRef { bname: id })),
         |i| digit1(i).map(|(rest,n)| (rest,IRExpr::IntLit { val: from_utf8(n).unwrap().parse::<u32>().unwrap() }))
     ))(i)
@@ -64,6 +67,7 @@ mod TestParseIRExpr {
     fn checkIRExpr() {
         let empty : &[u8] = b"";
         assert_eq!(parseIRExpr("%v3".as_bytes()), Ok((empty, IRExpr::Var { id : "v3" })));
+        assert_eq!(parseIRExpr("%3".as_bytes()), Ok((empty, IRExpr::Var { id : "3" })));
         assert_eq!(parseIRExpr("%asdf".as_bytes()), Ok((empty, IRExpr::Var { id : "asdf" })));
         assert_eq!(parseIRExpr("@v3".as_bytes()), Ok((empty, IRExpr::GlobalRef { name : "v3" })));
         assert_eq!(parseIRExpr("@asdf".as_bytes()), Ok((empty, IRExpr::GlobalRef { name : "asdf" })));
@@ -112,6 +116,7 @@ mod TestParseArgList {
         assert_eq!(parseArgList(")".as_bytes()), Ok((empty, vec![])));
         assert_eq!(parseArgList(", 3)".as_bytes()), Ok((empty, vec![IRExpr::IntLit {val:3}])));
         assert_eq!(parseArgList(", %v3, 3)".as_bytes()), Ok((empty, vec![IRExpr::Var { id: "v3"}, IRExpr::IntLit {val:3}])));
+        assert_eq!(parseArgList(", %3, 3)".as_bytes()), Ok((empty, vec![IRExpr::Var { id: "3"}, IRExpr::IntLit {val:3}])));
         assert_eq!(
             parseArgList(", %v3 , 3 )".as_bytes()).map(|(rest,r)| (from_utf8(rest).unwrap(),r)), 
             Ok(("", vec![IRExpr::Var { id: "v3"}, IRExpr::IntLit {val:3}])));
@@ -148,9 +153,9 @@ pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i,_) = multispace0(i)?;
     alt((
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,tag("phi("),multispace0,parsePhiArgList))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parsePhiArgList))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
         |i| tuple((tag("%"),
-                   identifier,
+                   parse_register_name,
                    tuple((multispace1,tag("="),multispace1)),
                    tag("call("),
                    parseIRExpr,
@@ -159,10 +164,10 @@ pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
                    multispace0,
                    parseArgList, // TODO: check handling of that first comma before the varargs part
             ))(i).map(|(rest,(_,l,_,_,cd,_,rcv,_,args))| (rest,Prim::Call { lhs: l, code: cd, receiver: rcv, args: args })),
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,tag("alloc("),digit1,tag(")")))(i).map(
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("alloc("),digit1,tag(")")))(i).map(
             |(rest,(_,l,_,_,_,_,d,_))| (rest,Prim::Alloc { lhs: l, slots: from_utf8(d).unwrap().parse::<u32>().unwrap() })),
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr,multispace1,parseOp,multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
-        |i| tuple((tag("%"),identifier,multispace1,tag("="),multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parseIRExpr,multispace1,parseOp,multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parseIRExpr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
         // print, getelt, setelt, load, store
         |i| tuple((tag("print("),multispace0,parseIRExpr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, Prim::Print { out: e})),
         |i| tuple((tag("fail"),multispace1,parseReason))(i).map(|(rest,(_,_,r))| (rest, Prim::Fail { reason: r}))
@@ -184,6 +189,7 @@ mod TestParseIRStatement {
 
         assert_eq!(parseIRStatement("%v = 3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
         assert_eq!(parseIRStatement("  %v  =   3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parseIRStatement("%1 = 10".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}})));
 
         assert_eq!(parseIRStatement("%v = phi(bb1,%q,bb3,5)".as_bytes()), 
                    Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
@@ -211,33 +217,119 @@ pub fn parseControl(i: &[u8]) -> IResult<&[u8], ControlXfer> {
     let (i,_) = multispace0(i)?;
     alt((
         |i| tuple((tag("jump"),multispace1,identifier))(i).map(|(rest,(_,_,n))| (rest,ControlXfer::Jump { block: n})),
-        |i| tuple((tag("if"),multispace1,tag("%"),identifier,multispace1,tag("then"),multispace1,identifier,multispace1,tag("else"),multispace1,identifier))(i).map(|(rest,(_,_,_,b,_,_,_,t,_,_,_,f))| (rest,ControlXfer::If { var: b, tblock: t, fblock: f})),
+        |i| tuple((tag("if"),multispace1,tag("%"),parse_register_name,multispace1,tag("then"),multispace1,identifier,multispace1,tag("else"),multispace1,identifier))(i).map(|(rest,(_,_,_,b,_,_,_,t,_,_,_,f))| (rest,ControlXfer::If { var: b, tblock: t, fblock: f})),
         |i| tuple((tag("ret"),multispace1,parseIRExpr))(i).map(|(rest,(_,_,n))| (rest,ControlXfer::Ret { val: n})),
     ))(i)
+}
+#[cfg(test)]
+mod TestParseControl {
+    use crate::*;
+    #[test]
+    fn checkControl() {
+        let empty : &[u8] = b"";
+        assert_eq!(parseControl("\tjump loophead".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
+            Ok((empty, ControlXfer::Jump { block: "loophead" })));
+        assert_eq!(parseControl("\tret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
+            Ok((empty, ControlXfer::Ret { val: IRExpr::IntLit { val: 0 } })));
+    }
 }
 
 #[derive(Debug,PartialEq)]
 pub struct BasicBlock<'a> {
+    name: &'a str,
     instrs: Vec<Prim<'a>>,
     next: ControlXfer<'a>
 }
-pub fn parseBB(i: &[u8]) -> IResult<&[u8], BasicBlock> {
+pub fn parse_basic_block(i: &[u8]) -> IResult<&[u8], BasicBlock> {
     let (i,_) = multispace0(i)?;
     tuple((
-        identifier, tag(":\n"), separated_list1(tag("\n"),parseIRStatement), parseControl
-    ))(i).map(|(rest,(name,_,prims,ctrl))| (rest,BasicBlock { instrs: prims, next: ctrl}))
+        identifier, tag(":\n"), parseIRStatements, parseControl
+    ))(i).map(|(rest,(name,_,prims,ctrl))| (rest,BasicBlock { name: name, instrs: prims, next: ctrl}))
+}
+#[cfg(test)]
+mod TestParseBB {
+    use crate::*;
+    #[test]
+    fn checkBB() {
+        let empty : &[u8] = b"";
+        assert_eq!(parse_basic_block("main:\n\t%1 = 10\nret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
+            Ok((empty, BasicBlock {
+                        name: "main",
+                instrs: vec![Prim::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}}],
+                next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
+            })));
+    }
 }
 
 #[derive(Debug,PartialEq)]
 pub enum GlobalStatic<'a> {
     Array { name: &'a str, vals: Vec<IRExpr<'a>> }
 }
+pub fn parse_id_list(i: &[u8]) -> IResult<&[u8], Vec<&str>> {
+    separated_list0(tuple((multispace0,tag(","),multispace0)), identifier)(i)
+}
+pub fn parseGlobal(i: &[u8]) -> IResult<&[u8], GlobalStatic> {
+    tuple((
+        tuple((multispace0,tag("global"), multispace1, tag("array"), multispace0)),
+        identifier,
+        tuple((multispace0,tag(":"), multispace0, tag("{"))),
+        parseArgList,
+        multispace0,
+        tag("}")
+    ))(i).map(|(rest,(_,name,_,vs,_,_))| (rest,GlobalStatic::Array {name: name, vals: vs}))
+}
+
+#[derive(Debug,PartialEq)]
 pub struct IRProgram<'a> {
-    Globals: Vec<&'a GlobalStatic<'a>>,
-    Blocks: HashMap<&'a str, &'a BasicBlock<'a>>
+    Globals: Vec<GlobalStatic<'a>>,
+    Blocks: HashMap<&'a str, BasicBlock<'a>>
 }
 
 
+pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
+    let (rst,_) = tuple((multispace0,tag("data:\n")))(i)?;
+    let mut globals = vec![];
+    let mut lastGlobalParse = parseGlobal(rst);
+    while let Ok((remaining,g)) = lastGlobalParse {
+        globals.push(g);
+        lastGlobalParse = parseGlobal(remaining);
+    }
+    match lastGlobalParse.finish() {
+        Err(nom::error::Error{ input: postglobals, code: _}) => {
+            // TODO: figure out what happens with 
+            let (rst2,_) = tuple((multispace0,tag("code:\n")))(postglobals)?;
+            let mut last_block_parse = parse_basic_block(rst2);
+            let mut blocks = vec![];
+            while let Ok((remaining2,b)) = last_block_parse {
+                println!("Parsed basic block:\n{:?}", &b);
+                blocks.push(b);
+                last_block_parse = parse_basic_block(remaining2);
+            }
+            println!("last_block_parse={:?}", &last_block_parse);
+            match last_block_parse.finish() {
+                Err(nom::error::Error{ input: postcode, code: _}) => {
+                    println!("postcode={}", from_utf8(postcode).unwrap());
+                    let tail = all_consuming::<_,_,nom::error::Error<&[u8]>,_>(multispace0)(postcode).finish();
+                    match tail {
+                        Ok(_) => {
+                            let mut bs = HashMap::new();
+                            while let Some(b) = blocks.pop() {
+                                bs.insert(b.name, b);
+                            }
+                            Ok(("".as_bytes(), IRProgram { Globals: globals, Blocks: bs}))
+                        },
+                        Err(nom::error::Error { input: x, code: _}) => {
+                            panic!("Leftover text after last parsed block: {}", from_utf8(x).unwrap())
+                        }
+                    }
+                },
+                _ => panic!("shouldn't hit this")
+            }
+            // TODO: "finish" to make sure we didn't just stop on a malformed block
+        },
+        _ => panic!("This should be impossible"),
+    }
+}
 
 
 
@@ -281,6 +373,28 @@ fn execBBBody<'a>(b:&BasicBlock<'a>,m:Memory,l:Locals<'a>) -> Result<(), Runtime
 }
 
 
-fn main() {
-    println!("Hello, world!");
+fn main() -> Result<(),Box<dyn std::error::Error>> {
+    let cmd = std::env::args().nth(1).expect("need subcommand check|run|compile");
+    let txt = std::env::args().nth(2).expect("441 IR code to process");
+
+    let libfile = Path::new(&txt);
+    let display = libfile.display();
+
+    let mut file = match File::open(&txt) {
+        Err(why) => panic!("Couldn't open {}: {}", display, why),
+        Ok(file) => file,
+    };
+    let mut bytes : Vec<u8> = vec![];
+    file.read_to_end(&mut bytes)?; 
+    let prog = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code }| from_utf8(input).unwrap())?;
+    let cmd_str = cmd.as_str();
+    if cmd_str == "check" {
+        println!("Parsed: {:?}", prog);
+    } else if cmd_str == "run" {
+        panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
+    } else {
+        panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
+    }
+    
+    Ok(())
 }

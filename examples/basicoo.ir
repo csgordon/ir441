@@ -1,0 +1,64 @@
+data:
+global array vtblA: { mA }
+global array fieldsA: { 2, 0 }
+global array vtblB: { mB }
+global array fieldsB: { 0, 2 }
+code:
+
+mA(%this):
+  %1 = %this & 1
+  if %1 then badptr else l2
+l2:
+  %2 = %this + 8         # Address to 2nd slot for *field* map
+  %3 = load(%2)       # Load field map
+  %4 = getelt(%3, 0)  # Look up field id 0, which I assume is x
+  # A field offset of 0 is invalid (that would be the vtable, which the program isn't allowed to access itself)
+  if %4 then getx else badfield
+getx:
+  %5 = getelt(%this, %4)  $ Load x from appropriate object offset
+  ret x
+badptr:
+  fail NotAPointer
+badfield:
+  fail NoSuchField
+
+mB(%this):
+  ret 0
+
+main:
+  # x = new A
+  %x0 = alloc(3)    # vtable, field map, field x
+  store(%x0, @vtblA)
+  %1 = %x0 + 8
+  store(%1, @fieldsA)
+  
+  # !x.x = 3 (unoptimized)
+  %2 = %x0 & 1
+  if %2 then badptr2 else firstStoreX
+firstStoreX:
+  %3 = %2 + 8         # Address to 2nd slot for *field* map
+  %4 = load(%3)       # Load field map
+  %5 = getelt(%4, 0)  # Look up field id 0, which I assume is x
+  if %5 then firstStoreXWorks else badfield2
+firstStoreXworks:
+  %6 = setelt(%x0, %5, 3)
+
+  # print(x.m())
+  %7 = %x0 & 1
+  if %7 then badptr3 else l1
+l1:
+  %8 = load(%x0)         # load vtable (note: offset 0, not offset 8)
+  %9 = getelt(%8, 0)  # lookup method id 0 (the only method here)
+  if %9 then callAndPrint else badmethod
+callAndPrint:
+  %10 = call(%9, %x0)
+  print(%10)
+  ret 0     # We assume main returns 0 automatically
+badptr2:
+  fail NotAPointer
+badfield2:
+  fail NoSuchField
+badptr3:
+  fail NotAPointer
+badmethod:
+  fail NoSuchMethod
