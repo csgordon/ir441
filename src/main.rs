@@ -22,6 +22,7 @@ pub enum VirtualVal<'a> {
     CodePtr { val: &'a str }
 }
 
+
 #[derive(Debug,PartialEq)]
 pub enum Reason {
     NotAPointer,
@@ -404,10 +405,17 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
 
 #[derive(Debug,PartialEq)]
 pub enum RuntimeError<'a> {
+    NYI,
+    WriteToImmutableData,
+    NullPointer,
     UnalignedAccess,
     UnallocatedAddress,
     UninitializedVariable { name: &'a str },
     MissingMain,
+    UndefinedVariable,
+    UndefinedGlobal,
+    CodeAddressArithmetic { bname: &'a str },
+    AccessingCodeInMemory { bname: &'a str }
 }
 
 
@@ -416,10 +424,26 @@ type Memory<'a> = HashMap<u64,VirtualVal<'a>>;
 type Locals<'a> = HashMap<&'a str, VirtualVal<'a>>;
 type Globals<'a> = HashMap<&'a str, u64>;
 fn memLookup<'a>(m:&Memory<'a>, addr:u64) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
-    if addr % 8 == 0 {
+    if addr == 0 {
+        Err(RuntimeError::NullPointer)
+    } else if addr % 8 == 0 {
         match m.get(&addr) {
             None => Err(RuntimeError::UnallocatedAddress),
             Some(&v) => Ok(v)
+        }
+    } else {
+        Err(RuntimeError::UnalignedAccess)
+    }
+}
+fn memStore<'a>(m:&mut Memory<'a>, firstWritable:u64, addr:u64, val:VirtualVal<'a>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+    if addr == 0 {
+        Err(RuntimeError::NullPointer)
+    } else if addr < firstWritable {
+        Err(RuntimeError::WriteToImmutableData)
+    } else if addr % 8 == 0 {
+        match m.get(&addr) {
+            None => Err(RuntimeError::UnallocatedAddress),
+            Some(&v) => { Ok(m.insert(addr, val).unwrap()) }
         }
     } else {
         Err(RuntimeError::UnalignedAccess)
@@ -431,8 +455,9 @@ fn readVar<'a>(l:&Locals<'a>, v:&'a str) -> Result<VirtualVal<'a>,RuntimeError<'
         None => Err(RuntimeError::UninitializedVariable { name : v})
     }
 }
-fn setVar<'a>(l:&mut Locals<'a>, x:&'a str, val:VirtualVal<'a>) {
+fn setVar<'a>(l:&mut Locals<'a>, x:&'a str, val:VirtualVal<'a>) -> Result<(),RuntimeError<'a>> {
     l.insert(x, val);
+    Ok(())
 }
 
 
@@ -449,12 +474,36 @@ fn init_memory<'a>(prog: &'a IRProgram) -> (u64,Memory<'a>,Globals<'a>) {
     let mut globs : Globals = HashMap::new();
 
     for g in prog.Globals.iter() {
-
+        let GlobalStatic::Array { name: n, vals: vs } = g;
+        globs.insert(n, nextFree);
+        for v in vs.iter() {
+            m.insert(nextFree, v.clone());
+            nextFree = nextFree + 1;
+        }
     }
 
     (nextFree,m,globs)
 }
 
+fn expr_val<'a>(l:&Locals<'a>, globs:&Globals<'a>, prog:&IRProgram<'a>, e:&IRExpr<'a>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+    // TODO need globals and program to detect invalid block and global references,
+    // and to map global names to locations
+    match e {
+        IRExpr::IntLit { val: v } => Ok(VirtualVal::Data { val: u64::from(*v) }),
+        IRExpr::Var { id: n } => readVar(l, n),
+        IRExpr::BlockRef { bname: b } =>
+            match prog.Blocks.get(b) {
+                None => Err(RuntimeError::UndefinedGlobal),
+                Some(_) => Ok(VirtualVal::CodePtr { val: b } )
+            },
+        IRExpr::GlobalRef { name: n } => { 
+            match globs.get(n) {
+                None => Err(RuntimeError::UndefinedGlobal),
+                Some(v) => Ok(VirtualVal::Data { val: v.clone()} )
+            }
+        },
+    }
+}
 fn run_prog<'a>(prog: &'a IRProgram) -> Result<(),RuntimeError<'a>> {
 
     let main = prog.Blocks.get("main");
@@ -462,6 +511,102 @@ fn run_prog<'a>(prog: &'a IRProgram) -> Result<(),RuntimeError<'a>> {
         return Err(RuntimeError::MissingMain);
     }
     let mut cur_block = main.unwrap();
+    let (mut_mem_start, mut m, mut globs) = init_memory(prog);
+    // mut_mem_start is the starting allocation point, but more importantly is also the dividing line between read-only and writable memory, so we can warn about invalid writes to RO mem
+    let mut nextAlloc = mut_mem_start;
+    let mut cycles = 0;
+    let mut localstack = vec![HashMap::new()];
+    let mut stack : Vec<&'a str>= vec![];
+    let mut prevblock : Option<&'a str> = None;
+    
+    for i in cur_block.instrs.iter() {
+        let step =
+        match i {
+            Prim::Print { out: e } => {
+                let v = expr_val(&localstack[0], &globs, &prog, &e)?;
+                println!("{:?}",v);
+                Ok(())
+            },
+            Prim::Alloc { lhs: v, slots: n } => {
+                // reserve n addresses at 8-byte offsets from next alloc
+                Err(RuntimeError::NYI)
+            },
+            Prim::VarAssign { lhs: var, rhs: e } => {
+                let v = expr_val(&localstack[0], &globs, &prog, &e)?;
+                setVar(&mut localstack[0], var, v)
+            },
+            Prim::Phi { .. } => Err(RuntimeError::NYI),
+            Prim::Call { .. } => Err(RuntimeError::NYI),
+            Prim::SetElt { base: base, offset: off, val: v } => {
+                let vbase = expr_val(&localstack[0], &globs, &prog, &base)?;
+                let offv = expr_val(&localstack[0], &globs, &prog, &off)?;
+                let v = expr_val(&localstack[0], &globs, &prog, &v)?;
+                match vbase {
+                    VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
+                    VirtualVal::Data { val: n } => 
+                        match offv {
+                            // TODO: should be different error
+                            VirtualVal::CodePtr { val: offb } => Err(RuntimeError::AccessingCodeInMemory { bname: offb }),
+                            VirtualVal::Data { val: offset } => memStore(&mut m, mut_mem_start, n+(8*offset), v).map(|_| ())
+                        }
+                }
+            },
+            Prim::GetElt { lhs: dest, base: e, offset: off } => {
+                let v = expr_val(&localstack[0], &globs, &prog, &e)?;
+                let offv = expr_val(&localstack[0], &globs, &prog, &off)?;
+                match v {
+                    VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
+                    VirtualVal::Data { val: n } => 
+                        match offv {
+                            // TODO: should be different error
+                            VirtualVal::CodePtr { val: offb } => Err(RuntimeError::AccessingCodeInMemory { bname: offb }),
+                            VirtualVal::Data { val: offset } => memLookup(&m, n+(8*offset)).map(|_| ())
+                        }
+                }
+            },
+            Prim::Load { lhs: dest, base: e } => {
+                let v = expr_val(&localstack[0], &globs, &prog, &e)?;
+                match v {
+                    VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
+                    VirtualVal::Data { val: n } => {
+                        let memval = memLookup(&m, n)?;
+                        setVar(&mut localstack[0], dest, memval)
+                    }
+                }
+            },
+            Prim::Store { base: e, val: ve } => {
+                let bv = expr_val(&localstack[0], &globs, &prog, &e)?;
+                let vv = expr_val(&localstack[0], &globs, &prog, &ve)?;
+                match bv {
+                    VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
+                    VirtualVal::Data { val: n } => {
+                        memStore(&mut m, mut_mem_start, n, vv).map(|_| ())
+                    }
+                }
+            },
+            Prim::Op { lhs: v, arg1: e1, op: o, arg2: e2} => {
+                let v1 = expr_val(&localstack[0], &globs, &prog, &e1)?;
+                let v2 = expr_val(&localstack[0], &globs, &prog, &e2)?;
+                match (v1,v2) {
+                    (VirtualVal::CodePtr{ val: b },_) => Err(RuntimeError::CodeAddressArithmetic { bname: b}),
+                    (_,VirtualVal::CodePtr{ val: b }) => Err(RuntimeError::CodeAddressArithmetic { bname: b}),
+                    (VirtualVal::Data { val: n1 }, VirtualVal::Data { val: n2 }) => 
+                        // We've ruled out computing with code addresses, which we don't plan to allow
+                        match *o {
+                            "+" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1+n2 }),
+                            "-" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1-n2 }),
+                            "/" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1/n2 }),
+                            "*" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1*n2 }),
+                            "&" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1&n2 }),
+                            "|" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1|n2 }),
+                            "^" => setVar(&mut localstack[0], v, VirtualVal::Data { val: n1^n2 }),
+                            _ => Err(RuntimeError::NYI) 
+                        }
+                    
+                }
+            },
+        }?;
+    }
 
     Err(RuntimeError::MissingMain)
 }
