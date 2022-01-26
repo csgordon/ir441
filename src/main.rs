@@ -95,11 +95,10 @@ pub enum Prim<'a> {
     Phi { lhs: &'a str, opts: Vec<(&'a str, IRExpr<'a>)> },
     Alloc { lhs: &'a str, slots: u32 },
     Print { out: IRExpr<'a> },
-    GetElt { base: IRExpr<'a>, offset: IRExpr<'a> },
+    GetElt { lhs: &'a str, base: IRExpr<'a>, offset: IRExpr<'a> },
     SetElt { base: IRExpr<'a>, offset: IRExpr<'a>, val: IRExpr<'a> },
-    Load { base: IRExpr<'a> },
-    Store { base: IRExpr<'a>, val: IRExpr<'a> },
-    Fail { reason: Reason }
+    Load { lhs: &'a str, base: IRExpr<'a> },
+    Store { base: IRExpr<'a>, val: IRExpr<'a> }
 }
 pub fn parse_reason(i: &[u8]) -> IResult<&[u8], Reason> {
     let (i,_) = multispace0(i)?;
@@ -158,11 +157,20 @@ mod TestParsePhiArgList {
                    Ok((empty, vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})])));
     }
 }
+
+pub fn parse_full_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
+    tuple((multispace0,separated_list0(tuple((multispace0,tag(","),multispace0)),parse_ir_expr),multispace0,tag("}")))(i).map(|(rest,(_,v,_,_))| (rest,v) )
+}
 pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i,_) = multispace0(i)?;
     alt((
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parsePhiArgList))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,Prim::Load { lhs: l, base: a1 })),
+        |i| tuple((tag("store("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,v,_,_))| (rest,Prim::Store { base: base , val: v })),
+        |i| tuple((tag("setelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,off,_,_,_,v,_,_))| (rest,Prim::SetElt { base: base, offset: off, val: v })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("getelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,lhs,_,_,_,_,_,base,_,_,_,off,_,_))| (rest,Prim::GetElt { lhs: lhs, base: base, offset: off })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,Prim::Load { lhs: l, base: a1 })),
         |i| tuple((tag("%"),
                    parse_register_name,
                    tuple((multispace1,tag("="),multispace1)),
@@ -177,13 +185,13 @@ pub fn parseIRStatement(i: &[u8]) -> IResult<&[u8], Prim> {
             |(rest,(_,l,_,_,_,_,d,_))| (rest,Prim::Alloc { lhs: l, slots: from_utf8(d).unwrap().parse::<u32>().unwrap() })),
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr,multispace1,parse_op,multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
-        // print, getelt, setelt, load, store
-        |i| tuple((tag("print("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, Prim::Print { out: e})),
-        |i| tuple((tag("fail"),multispace1,parse_reason))(i).map(|(rest,(_,_,r))| (rest, Prim::Fail { reason: r}))
+        // print
+        |i| tuple((tag("print("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, Prim::Print { out: e}))
     ))(i)
 }
 pub fn parseIRStatements(i: &[u8]) -> IResult<&[u8], Vec<Prim>> {
-    separated_list0(tag("\n"), 
+    // This needs to eat trailing whitespace as well, but tuple((multispace0,tag("\n"))) seems to stick the \n into the whitespace....
+    separated_list0(tag("\n"),//tuple((multispace0,tag("\n"))), 
         parseIRStatement
         //|x|tuple((parseIRStatement, 
         //          alt((|y| multispace0(y).map(|(r,_)| (r,())), |y| tuple((multispace0, tag("#"), (is_not("\n")) ))(y).map(|(r,_)| (r,())) )) 
@@ -205,6 +213,10 @@ mod TestParseIRStatement {
         assert_eq!(parseIRStatement("  %v  =   3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
         assert_eq!(parseIRStatement("%1 = 10".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}})));
 
+        assert_eq!(parseIRStatement("%1 = load(%4)".as_bytes()), Ok((empty, Prim::Load { lhs: "1", base: IRExpr::Var { id : "4"}})));
+        assert_eq!(parseIRStatement("%3 = load(%2)".as_bytes()), Ok((empty, Prim::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
+        assert_eq!(parseIRStatement("  %3  =  load( %2 )".as_bytes()), Ok((empty, Prim::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
+
         assert_eq!(parseIRStatement("%v = phi(bb1,%q,bb3,5)".as_bytes()), 
                    Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
         assert_eq!(parseIRStatement("  %v  =   phi( bb1 , %q , bb3 , 5 )".as_bytes()), 
@@ -218,6 +230,10 @@ mod TestParseIRStatement {
             Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
                             Prim::Print { out: IRExpr::Var { id: "v"}}
             ])));
+        assert_eq!(parseIRStatements("\t %v   =  %q   * 4     \nprint( %v )".as_bytes()), 
+            Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
+                            Prim::Print { out: IRExpr::Var { id: "v"}}
+            ])));
     }
 }
 
@@ -225,7 +241,8 @@ mod TestParseIRStatement {
 pub enum ControlXfer<'a> {
     Jump { block: &'a str },
     If { var: &'a str, tblock: &'a str, fblock: &'a str },
-    Ret { val: IRExpr<'a> }
+    Ret { val: IRExpr<'a> },
+    Fail { reason: Reason }
 }
 pub fn parseControl(i: &[u8]) -> IResult<&[u8], ControlXfer> {
     let (i,_) = multispace0(i)?;
@@ -233,6 +250,7 @@ pub fn parseControl(i: &[u8]) -> IResult<&[u8], ControlXfer> {
         |i| tuple((tag("jump"),multispace1,identifier))(i).map(|(rest,(_,_,n))| (rest,ControlXfer::Jump { block: n})),
         |i| tuple((tag("if"),multispace1,tag("%"),parse_register_name,multispace1,tag("then"),multispace1,identifier,multispace1,tag("else"),multispace1,identifier))(i).map(|(rest,(_,_,_,b,_,_,_,t,_,_,_,f))| (rest,ControlXfer::If { var: b, tblock: t, fblock: f})),
         |i| tuple((tag("ret"),multispace1,parse_ir_expr))(i).map(|(rest,(_,_,n))| (rest,ControlXfer::Ret { val: n})),
+        |i| tuple((tag("fail"),multispace1,parse_reason))(i).map(|(rest,(_,_,r))| (rest, ControlXfer::Fail { reason: r}))
     ))(i)
 }
 #[cfg(test)]
@@ -335,10 +353,10 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
     let (rst,_) = tuple((multispace0,tag("data:\n")))(i)?;
     let mut globals = vec![];
     let mut lastGlobalParse = parseGlobal(rst);
-    print!("Initial global parse {:?}", lastGlobalParse);
+    //print!("Initial global parse {:?}", lastGlobalParse);
     while let Ok((remaining,g)) = lastGlobalParse {
-        print!("Parsed {:?}", g);
-        print!("Global remaining = {}", from_utf8(remaining).unwrap());
+        //print!("Parsed {:?}", g);
+        //print!("Global remaining = {}", from_utf8(remaining).unwrap());
         globals.push(g);
         lastGlobalParse = parseGlobal(remaining);
     }
@@ -349,16 +367,16 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
             let mut last_block_parse = parse_basic_block(rst2);
             let mut blocks = vec![];
             while let Ok((remaining2,b)) = last_block_parse {
-                println!("Parsed basic block:\n{:?}", &b);
-                println!("remaining text: {:?}", from_utf8(remaining2).unwrap());
+                //println!("Parsed basic block:\n{:?}", &b);
+                //println!("remaining text: {:?}", from_utf8(remaining2).unwrap());
                 blocks.push(b);
                 last_block_parse = parse_basic_block(remaining2);
-            println!("last_block_parse={:?}", &last_block_parse);
+                //println!("last_block_parse={:?}", &last_block_parse);
             }
-            println!("last_block_parse={:?}", &last_block_parse);
+            //println!("last_block_parse={:?}", &last_block_parse);
             match last_block_parse.finish() {
                 Err(nom::error::Error{ input: postcode, code: _}) => {
-                    println!("postcode={}", from_utf8(postcode).unwrap());
+                    //println!("postcode={}", from_utf8(postcode).unwrap());
                     let tail = all_consuming::<_,_,nom::error::Error<&[u8]>,_>(multispace0)(postcode).finish();
                     match tail {
                         Ok(_) => {
