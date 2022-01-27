@@ -50,7 +50,7 @@ impl fmt::Display for Reason {
 }
 #[derive(Debug,PartialEq)]
 pub enum IRExpr<'a> {
-    IntLit { val: u32 },
+    IntLit { val: u64 },
     GlobalRef { name: &'a str },
     Var { id: &'a str },
     BlockRef { bname: &'a str },
@@ -96,7 +96,7 @@ pub fn parse_ir_expr(i: &[u8]) -> IResult<&[u8], IRExpr> {
         |i| tuple((tag("@"),identifier))(i).map(|(rest,(_,id))| (rest,IRExpr::GlobalRef { name : id })),
         |i| tuple((tag("%"),parse_register_name))(i).map(|(rest,(_,id))| (rest,IRExpr::Var { id: id })),
         |i| identifier(i).map(|(rest,id)| (rest,IRExpr::BlockRef { bname: id })),
-        |i| digit1(i).map(|(rest,n)| (rest,IRExpr::IntLit { val: from_utf8(n).unwrap().parse::<u32>().unwrap() }))
+        |i| digit1(i).map(|(rest,n)| (rest,IRExpr::IntLit { val: from_utf8(n).unwrap().parse::<u64>().unwrap() }))
     ))(i)
 }
 #[cfg(test)]
@@ -115,6 +115,7 @@ mod TestParseIRExpr {
         assert_eq!(parse_ir_expr("3".as_bytes()), Ok((empty, IRExpr::IntLit { val : 3 })));
         assert_eq!(parse_ir_expr("2342342".as_bytes()), Ok((empty, IRExpr::IntLit { val : 2342342 })));
         assert_eq!(parse_ir_expr("23432241".as_bytes()), Ok((empty, IRExpr::IntLit { val : 23432241 })));
+        assert_eq!(parse_ir_expr("18446744073709551614".as_bytes()), Ok((empty, IRExpr::IntLit { val : 18446744073709551614 })));
     }
 }
 
