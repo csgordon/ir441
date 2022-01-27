@@ -84,7 +84,10 @@ pub fn parse_op(i: &[u8]) -> IResult<&[u8], &str> {
         tag("/"),
         tag("|"),
         tag("&"),
-        tag("^")
+        tag("^"),
+        tag("<"),
+        tag(">"),
+        tag("==")
     ))(i).map(|(rest,op)| (rest, from_utf8(op).unwrap()))
 }
 pub fn parse_register_name(i: &[u8]) -> IResult<&[u8], &str> {
@@ -809,6 +812,9 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                                 "&" => set_var(&mut locs, v, VirtualVal::Data { val: n1&n2 }),
                                 "|" => set_var(&mut locs, v, VirtualVal::Data { val: n1|n2 }),
                                 "^" => set_var(&mut locs, v, VirtualVal::Data { val: n1^n2 }),
+                                "<" => set_var(&mut locs, v, VirtualVal::Data { val: if n1<n2 { 1 } else {0} }),
+                                ">" => set_var(&mut locs, v, VirtualVal::Data { val: if n1>n2 {1} else {0} }),
+                                "==" => set_var(&mut locs, v, VirtualVal::Data { val: if n1==n2 {1} else {0}}),
                                 _ => Err(RuntimeError::NYI) 
                             }
                         
