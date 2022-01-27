@@ -120,7 +120,7 @@ mod TestParseIRExpr {
 }
 
 #[derive(Debug,PartialEq)]
-pub enum Prim<'a> {
+pub enum IRStatement<'a> {
     VarAssign { lhs: &'a str, rhs: IRExpr<'a> },
     Op { lhs: &'a str, arg1: IRExpr<'a>, op: &'a str, arg2: IRExpr<'a> },
     Call { lhs: &'a str, code: IRExpr<'a>, receiver: IRExpr<'a>, args: Vec<IRExpr<'a>> },
@@ -133,18 +133,18 @@ pub enum Prim<'a> {
     Store { base: IRExpr<'a>, val: IRExpr<'a> }
 }
 
-impl <'a> fmt::Display for Prim<'a> {
+impl <'a> fmt::Display for IRStatement<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Prim::VarAssign { lhs, rhs } => write!(f, "%{} = {}", lhs, rhs),
-            Prim::Op { lhs, arg1, op, arg2 } => write!(f, "%{} = {} {} {}", lhs, arg1, op, arg2),
-            Prim::Alloc { lhs, slots } => write!(f, "%{} = alloc({})", lhs, slots),
-            Prim::Print { out } => write!(f, "print({})", out),
-            Prim::GetElt { lhs, base, offset } => write!(f, "%{} = getelt({}, {})", lhs, base, offset),
-            Prim::SetElt { base, offset, val } => write!(f, "setelt({}, {}, {})", base, offset, val),
-            Prim::Load { lhs, base } => write!(f, "%{} = load({})", lhs, base),
-            Prim::Store { base, val } => write!(f, "store({}, {})", base, val),
-            Prim::Call { lhs, code, receiver, args } => {
+            IRStatement::VarAssign { lhs, rhs } => write!(f, "%{} = {}", lhs, rhs),
+            IRStatement::Op { lhs, arg1, op, arg2 } => write!(f, "%{} = {} {} {}", lhs, arg1, op, arg2),
+            IRStatement::Alloc { lhs, slots } => write!(f, "%{} = alloc({})", lhs, slots),
+            IRStatement::Print { out } => write!(f, "print({})", out),
+            IRStatement::GetElt { lhs, base, offset } => write!(f, "%{} = getelt({}, {})", lhs, base, offset),
+            IRStatement::SetElt { base, offset, val } => write!(f, "setelt({}, {}, {})", base, offset, val),
+            IRStatement::Load { lhs, base } => write!(f, "%{} = load({})", lhs, base),
+            IRStatement::Store { base, val } => write!(f, "store({}, {})", base, val),
+            IRStatement::Call { lhs, code, receiver, args } => {
                 write!(f, "%{} = call({}, {}", lhs, code, receiver)?;
                 for elt in args {
                     write!(f, ", ")?;
@@ -152,7 +152,7 @@ impl <'a> fmt::Display for Prim<'a> {
                 }
                 write!(f,")")
             }
-            Prim::Phi { lhs, opts } => {
+            IRStatement::Phi { lhs, opts } => {
                 write!(f, "%{} = call(", lhs)?;
                 for (bname,src) in opts {
                     write!(f, ", {}, ", bname)?;
@@ -224,16 +224,16 @@ mod test_parse_phi_arg_list {
 pub fn parse_full_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
     tuple((multispace0,separated_list0(tuple((multispace0,tag(","),multispace0)),parse_ir_expr),multispace0,tag("}")))(i).map(|(rest,(_,v,_,_))| (rest,v) )
 }
-pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], Prim> {
+pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i,_) = multispace0(i)?;
     alt((
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parse_phi_arg_list))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,Prim::Phi { lhs: l, opts: a1 })),
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,Prim::Load { lhs: l, base: a1 })),
-        |i| tuple((tag("store("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,v,_,_))| (rest,Prim::Store { base: base , val: v })),
-        |i| tuple((tag("setelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,off,_,_,_,v,_,_))| (rest,Prim::SetElt { base: base, offset: off, val: v })),
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("getelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,lhs,_,_,_,_,_,base,_,_,_,off,_,_))| (rest,Prim::GetElt { lhs: lhs, base: base, offset: off })),
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,Prim::Load { lhs: l, base: a1 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parse_phi_arg_list))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,IRStatement::Phi { lhs: l, opts: a1 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,IRStatement::Load { lhs: l, base: a1 })),
+        |i| tuple((tag("store("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,v,_,_))| (rest,IRStatement::Store { base: base , val: v })),
+        |i| tuple((tag("setelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,base,_,_,_,off,_,_,_,v,_,_))| (rest,IRStatement::SetElt { base: base, offset: off, val: v })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("getelt("),multispace0,parse_ir_expr,multispace0,tag(","),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,lhs,_,_,_,_,_,base,_,_,_,off,_,_))| (rest,IRStatement::GetElt { lhs: lhs, base: base, offset: off })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("load("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,l,_,_,_,_,_,a1,_,_))| (rest,IRStatement::Load { lhs: l, base: a1 })),
         |i| tuple((tag("%"),
                    parse_register_name,
                    tuple((multispace1,tag("="),multispace1)),
@@ -243,16 +243,16 @@ pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], Prim> {
                    parse_ir_expr,
                    multispace0,
                    parse_arg_list, // TODO: check handling of that first comma before the varargs part
-            ))(i).map(|(rest,(_,l,_,_,cd,_,rcv,_,args))| (rest,Prim::Call { lhs: l, code: cd, receiver: rcv, args: args })),
+            ))(i).map(|(rest,(_,l,_,_,cd,_,rcv,_,args))| (rest,IRStatement::Call { lhs: l, code: cd, receiver: rcv, args: args })),
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("alloc("),digit1,tag(")")))(i).map(
-            |(rest,(_,l,_,_,_,_,d,_))| (rest,Prim::Alloc { lhs: l, slots: from_utf8(d).unwrap().parse::<u32>().unwrap() })),
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr,multispace1,parse_op,multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,Prim::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
-        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,Prim::VarAssign { lhs: l, rhs: a1 })),
+            |(rest,(_,l,_,_,_,_,d,_))| (rest,IRStatement::Alloc { lhs: l, slots: from_utf8(d).unwrap().parse::<u32>().unwrap() })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr,multispace1,parse_op,multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1,_,o,_,a2))| (rest,IRStatement::Op { lhs: l, arg1: a1, op: o, arg2: a2 })),
+        |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,parse_ir_expr))(i).map(|(rest,(_,l,_,_,_,a1))| (rest,IRStatement::VarAssign { lhs: l, rhs: a1 })),
         // print
-        |i| tuple((tag("print("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, Prim::Print { out: e}))
+        |i| tuple((tag("print("),multispace0,parse_ir_expr,multispace0,tag(")")))(i).map(|(rest,(_,_,e,_,_))| (rest, IRStatement::Print { out: e}))
     ))(i)
 }
-pub fn parse_ir_statements(i: &[u8]) -> IResult<&[u8], Vec<Prim>> {
+pub fn parse_ir_statements(i: &[u8]) -> IResult<&[u8], Vec<IRStatement>> {
     // This needs to eat trailing whitespace as well, but tuple((multispace0,tag("\n"))) seems to stick the \n into the whitespace....
     separated_list0(tag("\n"),//tuple((multispace0,tag("\n"))), 
         parse_ir_statement
@@ -267,42 +267,42 @@ mod test_parse_ir_statement {
     #[test]
     fn check_statements() {
         let empty : &[u8] = b"";
-        assert_eq!(parse_ir_statement("print(3)".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
-        assert_eq!(parse_ir_statement("print( 3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
-        assert_eq!(parse_ir_statement("print(\t3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
-        assert_eq!(parse_ir_statement("\t\tprint( 3 )".as_bytes()), Ok((empty, Prim::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("print(3)".as_bytes()), Ok((empty, IRStatement::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("print( 3 )".as_bytes()), Ok((empty, IRStatement::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("print(\t3 )".as_bytes()), Ok((empty, IRStatement::Print { out: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("\t\tprint( 3 )".as_bytes()), Ok((empty, IRStatement::Print { out: IRExpr::IntLit { val : 3}})));
 
-        assert_eq!(parse_ir_statement("%v = 3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
-        assert_eq!(parse_ir_statement("  %v  =   3".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
-        assert_eq!(parse_ir_statement("%1 = 10".as_bytes()), Ok((empty, Prim::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}})));
+        assert_eq!(parse_ir_statement("%v = 3".as_bytes()), Ok((empty, IRStatement::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("  %v  =   3".as_bytes()), Ok((empty, IRStatement::VarAssign { lhs: "v", rhs: IRExpr::IntLit { val : 3}})));
+        assert_eq!(parse_ir_statement("%1 = 10".as_bytes()), Ok((empty, IRStatement::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}})));
 
         assert_eq!(parse_ir_statement("%1 = call(%code, %recv, %arg1, %arg2)".as_bytes()),
-            Ok((empty, Prim::Call { lhs: "1", code: IRExpr::Var { id: "code" }, receiver: IRExpr::Var { id: "recv"}, args: vec![
+            Ok((empty, IRStatement::Call { lhs: "1", code: IRExpr::Var { id: "code" }, receiver: IRExpr::Var { id: "recv"}, args: vec![
                 IRExpr::Var { id: "arg1" },
                 IRExpr::Var { id: "arg2" },
             ]}))
         );
 
-        assert_eq!(parse_ir_statement("%1 = load(%4)".as_bytes()), Ok((empty, Prim::Load { lhs: "1", base: IRExpr::Var { id : "4"}})));
-        assert_eq!(parse_ir_statement("%3 = load(%2)".as_bytes()), Ok((empty, Prim::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
-        assert_eq!(parse_ir_statement("  %3  =  load( %2 )".as_bytes()), Ok((empty, Prim::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
+        assert_eq!(parse_ir_statement("%1 = load(%4)".as_bytes()), Ok((empty, IRStatement::Load { lhs: "1", base: IRExpr::Var { id : "4"}})));
+        assert_eq!(parse_ir_statement("%3 = load(%2)".as_bytes()), Ok((empty, IRStatement::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
+        assert_eq!(parse_ir_statement("  %3  =  load( %2 )".as_bytes()), Ok((empty, IRStatement::Load { lhs: "3", base: IRExpr::Var { id : "2"}})));
 
         assert_eq!(parse_ir_statement("%v = phi(bb1,%q,bb3,5)".as_bytes()), 
-                   Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
+                   Ok((empty, IRStatement::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
         assert_eq!(parse_ir_statement("  %v  =   phi( bb1 , %q , bb3 , 5 )".as_bytes()), 
-                   Ok((empty, Prim::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
+                   Ok((empty, IRStatement::Phi { lhs: "v", opts: vec![("bb1",IRExpr::Var{id:"q"}), ("bb3",IRExpr::IntLit{val:5})]})));
 
-        assert_eq!(parse_ir_statement("%v = 3 + 4".as_bytes()), Ok((empty, Prim::Op { lhs: "v", arg1: IRExpr::IntLit { val : 3}, op: "+", arg2: IRExpr::IntLit { val:4}})));
-        assert_eq!(parse_ir_statement("\t %v   =  %q   * 4".as_bytes()), Ok((empty, Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}})));
+        assert_eq!(parse_ir_statement("%v = 3 + 4".as_bytes()), Ok((empty, IRStatement::Op { lhs: "v", arg1: IRExpr::IntLit { val : 3}, op: "+", arg2: IRExpr::IntLit { val:4}})));
+        assert_eq!(parse_ir_statement("\t %v   =  %q   * 4".as_bytes()), Ok((empty, IRStatement::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}})));
 
 
         assert_eq!(parse_ir_statements("\t %v   =  %q   * 4\nprint( %v )".as_bytes()), 
-            Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
-                            Prim::Print { out: IRExpr::Var { id: "v"}}
+            Ok((empty, vec![IRStatement::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
+                            IRStatement::Print { out: IRExpr::Var { id: "v"}}
             ])));
         //assert_eq!(parse_ir_statements("\t %v   =  %q   * 4     \nprint( %v )".as_bytes()), 
-        //    Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
-        //                    Prim::Print { out: IRExpr::Var { id: "v"}}
+        //    Ok((empty, vec![IRStatement::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
+        //                    IRStatement::Print { out: IRExpr::Var { id: "v"}}
         //    ])));
     }
 }
@@ -360,7 +360,7 @@ mod TestParseControl {
 pub struct BasicBlock<'a> {
     name: &'a str,
     formals: Vec<&'a str>,
-    instrs: Vec<Prim<'a>>,
+    instrs: Vec<IRStatement<'a>>,
     next: ControlXfer<'a>
 }
 impl <'a> fmt::Display for BasicBlock<'a> {
@@ -418,7 +418,7 @@ mod TestParseBB {
             Ok((empty, BasicBlock {
                         name: "main",
                         formals: vec![],
-                instrs: vec![Prim::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}}],
+                instrs: vec![IRStatement::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}}],
                 next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
             })));
         assert_eq!(parse_basic_block("mB(this):\n\tret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
@@ -539,7 +539,7 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
 #[derive(Debug,PartialEq)]
 pub enum RuntimeError<'a> {
     NYI,
-    BadCallArity { instr: &'a Prim<'a> },
+    BadCallArity { instr: &'a IRStatement<'a> },
     CallingNonCode,
     WriteToImmutableData,
     NullPointer,
@@ -554,8 +554,8 @@ pub enum RuntimeError<'a> {
     AccessingCodeInMemory { bname: &'a str },
     InvalidBlock { bname: &'a str },
     InvalidBlockInControl { instr: &'a ControlXfer<'a>, bname: &'a str },
-    PhiInFirstBlock { instr: &'a Prim<'a> },
-    BadPhiPredecessor { instr: &'a Prim<'a>, actual_predecessor: &'a str }
+    PhiInFirstBlock { instr: &'a IRStatement<'a> },
+    BadPhiPredecessor { instr: &'a IRStatement<'a>, actual_predecessor: &'a str }
 }
 
 
@@ -673,12 +673,12 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
             }
             let step =
             match i {
-                Prim::Print { out: e } => {
+                IRStatement::Print { out: e } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
                     println!("{}",v);
                     Ok(())
                 },
-                Prim::Alloc { lhs: v, slots: n } => {
+                IRStatement::Alloc { lhs: v, slots: n } => {
                     // reserve n addresses at 8-byte offsets from next alloc
                     *next_alloc = *next_alloc + 8; // Skip 8 bytes to catch some memory errors
                     let result = *next_alloc;
@@ -691,11 +691,11 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     }
                     set_var(&mut locs, v, VirtualVal::Data { val: result })
                 },
-                Prim::VarAssign { lhs: var, rhs: e } => {
+                IRStatement::VarAssign { lhs: var, rhs: e } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
                     set_var(&mut locs, var, v)
                 },
-                Prim::Phi { lhs: dest, opts } => {
+                IRStatement::Phi { lhs: dest, opts } => {
                     if prevblock.is_none() {
                         return Err(RuntimeError::PhiInFirstBlock { instr: i });
                     }
@@ -715,7 +715,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         Err(RuntimeError::BadPhiPredecessor { instr: i, actual_predecessor: pred })
                     }
                 },
-                Prim::Call { lhs: dest, code, receiver: rec, args } => {
+                IRStatement::Call { lhs: dest, code, receiver: rec, args } => {
                     let mut calleevars = HashMap::new();
                     let vcode = expr_val(&locs, &globs, &prog, &code)?;
                     let target_block_name = match vcode {
@@ -741,7 +741,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let callresult = run_code(prog, target_block, calleevars, globs, next_alloc, mut_mem_start, m, tracing)?;
                     set_var(&mut locs, dest, callresult)
                 },
-                Prim::SetElt { base, offset: off, val: v } => {
+                IRStatement::SetElt { base, offset: off, val: v } => {
                     let vbase = expr_val(&locs, &globs, &prog, &base)?;
                     let offv = expr_val(&locs, &globs, &prog, &off)?;
                     let v = expr_val(&locs, &globs, &prog, &v)?;
@@ -755,7 +755,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                             }
                     }
                 },
-                Prim::GetElt { lhs: dest, base: e, offset: off } => {
+                IRStatement::GetElt { lhs: dest, base: e, offset: off } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
                     let offv = expr_val(&locs, &globs, &prog, &off)?;
                     match v {
@@ -771,7 +771,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                             }
                     }
                 },
-                Prim::Load { lhs: dest, base: e } => {
+                IRStatement::Load { lhs: dest, base: e } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
                     match v {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
@@ -781,7 +781,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         }
                     }
                 },
-                Prim::Store { base: e, val: ve } => {
+                IRStatement::Store { base: e, val: ve } => {
                     let bv = expr_val(&locs, &globs, &prog, &e)?;
                     let vv = expr_val(&locs, &globs, &prog, &ve)?;
                     match bv {
@@ -791,7 +791,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         }
                     }
                 },
-                Prim::Op { lhs: v, arg1: e1, op: o, arg2: e2} => {
+                IRStatement::Op { lhs: v, arg1: e1, op: o, arg2: e2} => {
                     let v1 = expr_val(&locs, &globs, &prog, &e1)?;
                     let v2 = expr_val(&locs, &globs, &prog, &e2)?;
                     match (v1,v2) {
@@ -888,7 +888,7 @@ fn check_warnings(prog: &IRProgram) {
         for i in b.instrs.iter() {
             // Check that all phi targets exist
             match i {
-                Prim::Phi { .. } => {
+                IRStatement::Phi { .. } => {
                     if past_phis {
                         println!("ERROR: phi instruction after non-phis in basic block {}: {:?}", b.name, i);
                     }
