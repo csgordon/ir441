@@ -16,7 +16,7 @@ l2:
   if %4 then getx else badfield
 getx:
   %5 = getelt(%this, %4)
-  ret x
+  ret %5
 badptr:
   fail NotAPointer
 badfield:
@@ -36,11 +36,11 @@ main:
   %2 = %x0 & 1
   if %2 then badptr2 else firstStoreX
 firstStoreX:
-  %3 = %2 + 8
+  %3 = %x0 + 8
   %4 = load(%3)
   %5 = getelt(%4, 0)
   if %5 then firstStoreXWorks else badfield2
-firstStoreXworks:
+firstStoreXWorks:
   setelt(%x0, %5, 3)
 
 
