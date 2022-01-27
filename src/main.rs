@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
-use std::collections::HashMap;
+use std::collections::{HashMap,BTreeMap};
 use std::str::{from_utf8};
 use nom::{IResult,Finish};
 use nom::bytes::complete::{tag,is_not};
@@ -23,7 +23,7 @@ pub enum VirtualVal<'a> {
 }
 impl <'a> fmt::Display for VirtualVal<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
+        match self {
             VirtualVal::Data { val } => write!(f, "{}", val),
             VirtualVal::CodePtr { val } => write!(f, "{}", val)
         }
@@ -38,12 +38,32 @@ pub enum Reason {
     NoSuchField,
     NoSuchMethod,
 }
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Reason::NotANumber => write!(f, "NotANumber"),
+            Reason::NotAPointer => write!(f, "NotAPointer"),
+            Reason::NoSuchField => write!(f, "NoSuchField"),
+            Reason::NoSuchMethod => write!(f, "NoSuchMethod"),
+        }
+    }
+}
 #[derive(Debug,PartialEq)]
 pub enum IRExpr<'a> {
     IntLit { val: u32 },
     GlobalRef { name: &'a str },
     Var { id: &'a str },
     BlockRef { bname: &'a str },
+}
+impl <'a> fmt::Display for IRExpr<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IRExpr::IntLit { val } => write!(f, "{}", val),
+            IRExpr::GlobalRef { name } => write!(f, "@{}", name),
+            IRExpr::BlockRef { bname } => write!(f, "{}", bname),
+            IRExpr::Var { id } => write!(f, "%{}", id),
+        }
+    }
 }
 // Adapted from nom recipes
 pub fn identifier(input: &[u8]) -> IResult<&[u8], &str> {
@@ -110,6 +130,37 @@ pub enum Prim<'a> {
     SetElt { base: IRExpr<'a>, offset: IRExpr<'a>, val: IRExpr<'a> },
     Load { lhs: &'a str, base: IRExpr<'a> },
     Store { base: IRExpr<'a>, val: IRExpr<'a> }
+}
+
+impl <'a> fmt::Display for Prim<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Prim::VarAssign { lhs, rhs } => write!(f, "%{} = {}", lhs, rhs),
+            Prim::Op { lhs, arg1, op, arg2 } => write!(f, "%{} = {} {} {}", lhs, arg1, op, arg2),
+            Prim::Alloc { lhs, slots } => write!(f, "%{} = alloc({})", lhs, slots),
+            Prim::Print { out } => write!(f, "print({})", out),
+            Prim::GetElt { lhs, base, offset } => write!(f, "%{} = getelt({}, {})", lhs, base, offset),
+            Prim::SetElt { base, offset, val } => write!(f, "setelt({}, {}, {})", base, offset, val),
+            Prim::Load { lhs, base } => write!(f, "%{} = load({})", lhs, base),
+            Prim::Store { base, val } => write!(f, "store({}, {})", base, val),
+            Prim::Call { lhs, code, receiver, args } => {
+                write!(f, "%{} = call({}, {}", lhs, code, receiver)?;
+                for elt in args {
+                    write!(f, ", ")?;
+                    elt.fmt(f)?;
+                }
+                write!(f,")")
+            }
+            Prim::Phi { lhs, opts } => {
+                write!(f, "%{} = call(", lhs)?;
+                for (bname,src) in opts {
+                    write!(f, ", {}, ", bname)?;
+                    src.fmt(f)?;
+                }
+                write!(f,")")
+            }
+        }
+    }
 }
 pub fn parse_reason(i: &[u8]) -> IResult<&[u8], Reason> {
     let (i,_) = multispace0(i)?;
@@ -248,10 +299,10 @@ mod test_parse_ir_statement {
             Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
                             Prim::Print { out: IRExpr::Var { id: "v"}}
             ])));
-        assert_eq!(parse_ir_statements("\t %v   =  %q   * 4     \nprint( %v )".as_bytes()), 
-            Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
-                            Prim::Print { out: IRExpr::Var { id: "v"}}
-            ])));
+        //assert_eq!(parse_ir_statements("\t %v   =  %q   * 4     \nprint( %v )".as_bytes()), 
+        //    Ok((empty, vec![Prim::Op { lhs: "v", arg1: IRExpr::Var { id: "q"}, op: "*", arg2: IRExpr::IntLit { val:4}},
+        //                    Prim::Print { out: IRExpr::Var { id: "v"}}
+        //    ])));
     }
 }
 
@@ -261,6 +312,26 @@ pub enum ControlXfer<'a> {
     If { cond: IRExpr<'a>, tblock: &'a str, fblock: &'a str },
     Ret { val: IRExpr<'a> },
     Fail { reason: Reason }
+}
+impl <'a> fmt::Display for ControlXfer<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ControlXfer::Jump { block } => write!(f, "jump {}", block),
+            ControlXfer::If { cond, tblock, fblock } => {
+                write!(f, "if ")?;
+                cond.fmt(f)?;
+                write!(f, " then {} else {}", tblock, fblock)
+            },
+            ControlXfer::Ret { val } => {
+                write!(f, "ret ")?;
+                val.fmt(f)
+            },
+            ControlXfer::Fail { reason } => {
+                write!(f,"fail ")?;
+                reason.fmt(f)
+            }
+        }
+    }
 }
 pub fn parse_control(i: &[u8]) -> IResult<&[u8], ControlXfer> {
     let (i,_) = multispace0(i)?;
@@ -290,6 +361,31 @@ pub struct BasicBlock<'a> {
     formals: Vec<&'a str>,
     instrs: Vec<Prim<'a>>,
     next: ControlXfer<'a>
+}
+impl <'a> fmt::Display for BasicBlock<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.formals.len() == 0 {
+            writeln!(f, "{}:", self.name)?;
+        } else {
+            write!(f, "{}(",self.name)?;
+            let mut first = true;
+            for arg in &self.formals {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", arg)?;
+            }
+            writeln!(f, "):")?;
+        }
+        for i in &self.instrs {
+            write!(f, "    ")?;
+            i.fmt(f)?;
+            writeln!(f, "")?;
+        }
+        write!(f, "    ")?;
+        self.next.fmt(f)?;
+        writeln!(f, "")
+    }
 }
 
 // They're not really supposed to have leading %s, but I shipped some demo code that did it, so let's accept it.
@@ -376,6 +472,14 @@ pub struct IRProgram<'a> {
     Globals: Vec<GlobalStatic<'a>>,
     Blocks: HashMap<&'a str, BasicBlock<'a>>
 }
+impl <'a> fmt::Display for IRProgram<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (_,b) in &self.Blocks {
+            b.fmt(f)?;
+        }
+        writeln!(f,"")
+    }
+}
 
 
 pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
@@ -434,26 +538,28 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
 #[derive(Debug,PartialEq)]
 pub enum RuntimeError<'a> {
     NYI,
-    BadCallArity,
+    BadCallArity { instr: &'a Prim<'a> },
     CallingNonCode,
     WriteToImmutableData,
     NullPointer,
-    UnalignedAccess,
-    UnallocatedAddress,
+    UnalignedAccess { addr: u64 },
+    UnallocatedAddressRead { addr: u64 },
+    UnallocatedAddressWrite { addr: u64 },
     UninitializedVariable { name: &'a str },
     MissingMain,
     UndefinedVariable,
-    UndefinedGlobal,
+    UndefinedGlobal { name: &'a str },
     CodeAddressArithmetic { bname: &'a str },
     AccessingCodeInMemory { bname: &'a str },
     InvalidBlock { bname: &'a str },
-    PhiInFirstBlock,
+    InvalidBlockInControl { instr: &'a ControlXfer<'a>, bname: &'a str },
+    PhiInFirstBlock { instr: &'a Prim<'a> },
     BadPhiPredecessor { instr: &'a Prim<'a>, actual_predecessor: &'a str }
 }
 
 
 // Memory is a map from u64 to u64. Lookup will fail for unaligned accesses for now
-type Memory<'a> = HashMap<u64,VirtualVal<'a>>;
+type Memory<'a> = BTreeMap<u64,VirtualVal<'a>>;
 type Locals<'a> = HashMap<&'a str, VirtualVal<'a>>;
 type Globals<'a> = HashMap<&'a str, u64>;
 fn mem_lookup<'a>(m:&Memory<'a>, addr:u64) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
@@ -461,11 +567,11 @@ fn mem_lookup<'a>(m:&Memory<'a>, addr:u64) -> Result<VirtualVal<'a>,RuntimeError
         Err(RuntimeError::NullPointer)
     } else if addr % 8 == 0 {
         match m.get(&addr) {
-            None => Err(RuntimeError::UnallocatedAddress),
+            None => Err(RuntimeError::UnallocatedAddressRead { addr }),
             Some(&v) => Ok(v)
         }
     } else {
-        Err(RuntimeError::UnalignedAccess)
+        Err(RuntimeError::UnalignedAccess { addr })
     }
 }
 fn mem_store<'a>(m:&mut Memory<'a>, first_writable:u64, addr:u64, val:VirtualVal<'a>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
@@ -475,11 +581,11 @@ fn mem_store<'a>(m:&mut Memory<'a>, first_writable:u64, addr:u64, val:VirtualVal
         Err(RuntimeError::WriteToImmutableData)
     } else if addr % 8 == 0 {
         match m.get(&addr) {
-            None => Err(RuntimeError::UnallocatedAddress),
+            None => Err(RuntimeError::UnallocatedAddressWrite { addr }),
             Some(_) => { Ok(m.insert(addr, val).unwrap()) }
         }
     } else {
-        Err(RuntimeError::UnalignedAccess)
+        Err(RuntimeError::UnalignedAccess { addr })
     }
 }
 fn read_var<'a>(l:&Locals<'a>, v:&'a str) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
@@ -495,8 +601,8 @@ fn set_var<'a>(l:&mut Locals<'a>, x:&'a str, val:VirtualVal<'a>) -> Result<(),Ru
 
 
 fn init_memory<'a>(prog: &'a IRProgram) -> (u64,Memory<'a>,Globals<'a>) {
-    let mut next_free : u64 = 0x32;
-    let mut m : Memory = HashMap::new();
+    let mut next_free : u64 = 32;
+    let mut m : Memory = BTreeMap::new();
     let mut globs : Globals = HashMap::new();
 
     for g in prog.Globals.iter() {
@@ -504,11 +610,26 @@ fn init_memory<'a>(prog: &'a IRProgram) -> (u64,Memory<'a>,Globals<'a>) {
         globs.insert(n, next_free);
         for v in vs.iter() {
             m.insert(next_free, v.clone());
-            next_free = next_free + 1;
+            next_free = next_free + 8;
         }
     }
 
     (next_free,m,globs)
+}
+fn print_memory<'a>(first_mutable: u64, prog: &'a IRProgram, m: &'a Memory<'a>, globs: &'a Globals<'a>) {
+    println!("Global Addresses:");
+    for (name,addr) in globs.iter() {
+        println!("\t@{} -> {}", name, addr)
+    }
+    println!("Memory Contents:");
+    let mut split_globals = false;
+    for (addr,val) in m.iter() {
+        if !split_globals && *addr > first_mutable {
+            println!("\t---------------- <end of globals, start of mutable memory>");
+            split_globals = true;
+        }
+        println!("\t{}: {}", addr, val);
+    }
 }
 
 fn expr_val<'a>(l:&Locals<'a>, globs:&Globals<'a>, prog:&IRProgram<'a>, e:&IRExpr<'a>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
@@ -519,12 +640,12 @@ fn expr_val<'a>(l:&Locals<'a>, globs:&Globals<'a>, prog:&IRProgram<'a>, e:&IRExp
         IRExpr::Var { id: n } => read_var(l, n),
         IRExpr::BlockRef { bname: b } =>
             match prog.Blocks.get(b) {
-                None => Err(RuntimeError::UndefinedGlobal),
+                None => Err(RuntimeError::InvalidBlock { bname: b}),
                 Some(_) => Ok(VirtualVal::CodePtr { val: b } )
             },
         IRExpr::GlobalRef { name: n } => { 
             match globs.get(n) {
-                None => Err(RuntimeError::UndefinedGlobal),
+                None => Err(RuntimeError::UndefinedGlobal { name: n }),
                 Some(v) => Ok(VirtualVal::Data { val: v.clone()} )
             }
         },
@@ -538,13 +659,17 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 globs: &mut Globals<'a>,
                 next_alloc: &mut u64,
                 mut_mem_start: u64,
-                m: &mut Memory<'a>
+                m: &mut Memory<'a>,
+                tracing: bool
             ) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
     // on entry no previous block
     let mut prevblock : Option<&'a str> = None;
     let mut finalresult = None;
     while let None = finalresult {
         for i in cur_block.instrs.iter() {
+            if tracing {
+                println!("Executing: {}", i);
+            }
             let step =
             match i {
                 Prim::Print { out: e } => {
@@ -558,8 +683,10 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let result = *next_alloc;
                     let mut allocd = 0;
                     while allocd < *n {
-                        mem_store(m, mut_mem_start, *next_alloc, VirtualVal::Data { val: 0 })?;
+                        // Must insert directly to side-step allocation checks
+                        m.insert(*next_alloc, VirtualVal::Data { val: 0 });
                         *next_alloc = *next_alloc + 8;
+                        allocd = allocd + 1;
                     }
                     set_var(&mut locs, v, VirtualVal::Data { val: result })
                 },
@@ -569,7 +696,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 },
                 Prim::Phi { lhs: dest, opts } => {
                     if prevblock.is_none() {
-                        return Err(RuntimeError::PhiInFirstBlock);
+                        return Err(RuntimeError::PhiInFirstBlock { instr: i });
                     }
                     let pred = prevblock.unwrap();
                     let mut done = false;
@@ -601,7 +728,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let vrec = expr_val(&locs, &globs, &prog, &rec)?;
                     set_var(&mut calleevars, target_block.formals[0], vrec)?;
                     if args.len() + 1 != target_block.formals.len() {
-                        return Err(RuntimeError::BadCallArity);
+                        return Err(RuntimeError::BadCallArity { instr: i });
                     }
                     // args are in left-to-right order. Receiver is idx 0.
                     let mut argidx = 1;
@@ -610,7 +737,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         set_var(&mut calleevars, target_block.formals[argidx], varg)?;
                         argidx = argidx + 1;
                     }
-                    let callresult = run_code(prog, target_block, calleevars, globs, next_alloc, mut_mem_start, m)?;
+                    let callresult = run_code(prog, target_block, calleevars, globs, next_alloc, mut_mem_start, m, tracing)?;
                     set_var(&mut locs, dest, callresult)
                 },
                 Prim::SetElt { base, offset: off, val: v } => {
@@ -688,6 +815,9 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 },
             }?;
         }
+        if tracing {
+            println!("Transfering via: {}", &cur_block.next);
+        }
         match &cur_block.next {
             ControlXfer::Fail {reason: r} => { panic!("Failure: {:?}", r )},
             ControlXfer::Ret { val: e } => {
@@ -697,7 +827,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
             ControlXfer::Jump { block: b } => {
                 let target_block = match prog.Blocks.get(b) {
                         Some(b) => Ok(b),
-                        None => Err(RuntimeError::InvalidBlock { bname: b })
+                        None => Err(RuntimeError::InvalidBlockInControl { instr: &cur_block.next, bname: b })
                 }?;
                 prevblock = Some(cur_block.name);
                 cur_block = target_block;
@@ -711,7 +841,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 };
                 let target_block = match prog.Blocks.get(target_block_name) {
                         Some(b) => Ok(b),
-                        None => Err(RuntimeError::InvalidBlock { bname: target_block_name })
+                        None => Err(RuntimeError::InvalidBlockInControl { instr: &cur_block.next, bname: target_block_name })
                 }?;
                 prevblock = Some(cur_block.name);
                 cur_block = target_block;
@@ -720,7 +850,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
     }
     Ok(finalresult.unwrap())
 }
-fn run_prog<'a>(prog: &'a IRProgram) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+fn run_prog<'a>(prog: &'a IRProgram, tracing: bool) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
 
     let main = prog.Blocks.get("main");
     if main.is_none() {
@@ -728,11 +858,24 @@ fn run_prog<'a>(prog: &'a IRProgram) -> Result<VirtualVal<'a>,RuntimeError<'a>> 
     }
     let mut cur_block = main.unwrap();
     let (mut_mem_start, mut m, mut globs) = init_memory(prog);
+    if tracing {
+        println!("Initial Globals:\n{:?}", globs);
+    }
     // mut_mem_start is the starting allocation point, but more importantly is also the dividing line between read-only and writable memory, so we can warn about invalid writes to RO mem
     let mut next_alloc = mut_mem_start;
     let mut cycles = 0;
     // Run main with an empty variable
-    run_code(prog, cur_block, HashMap::new(), &mut globs, &mut next_alloc, mut_mem_start, &mut m)
+    let fresult = run_code(prog, cur_block, HashMap::new(), &mut globs, &mut next_alloc, mut_mem_start, &mut m, tracing);
+    match &fresult {
+        Ok(v) => {
+            println!("Final result: {:?}", v);
+        },
+        Err(err) => {
+            println!("Program crashed with: {:?}", err);
+            print_memory(mut_mem_start, prog, &m, &globs);
+        }
+    };
+    fresult
 }
 
 fn check_warnings(prog: &IRProgram) {
@@ -787,13 +930,16 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     let (leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code }| from_utf8(input).unwrap())?;
     let cmd_str = cmd.as_str();
     if cmd_str == "check" {
-        println!("Parsed: {:?}", prog);
+        println!("Parsed: {}", prog);
         check_warnings(&prog);
     } else if cmd_str == "exec" {
-        println!("Parsed: {:?}", prog);
+        println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let fresult = run_prog(&prog);
-        println!("Final result: {:?}", fresult);
+        let fresult = run_prog(&prog, false);
+    } else if cmd_str == "trace" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let fresult = run_prog(&prog, true);
     } else {
         panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
     }
