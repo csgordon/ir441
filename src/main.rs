@@ -423,7 +423,7 @@ mod TestParseBB {
         assert_eq!(parse_basic_block("mB(this):\n\tret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
             Ok((empty, BasicBlock {
                         name: "mB",
-                        formals: vec![],
+                        formals: vec!["this"],
                 instrs: vec![],
                 next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
             })));
