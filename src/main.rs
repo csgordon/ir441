@@ -7,12 +7,12 @@ use std::path::Path;
 use std::collections::{HashMap,BTreeMap};
 use std::str::{from_utf8};
 use nom::{IResult,Finish};
-use nom::bytes::complete::{tag,is_not};
+use nom::bytes::complete::{tag};
 use nom::branch::{alt};
-use nom::character::complete::{digit1,alpha1,multispace1, multispace0,alphanumeric1, none_of};
+use nom::character::complete::{digit1,alpha1,multispace1, multispace0,alphanumeric1};
 use nom::sequence::{tuple,pair};
-use nom::combinator::{recognize,all_consuming};
-use nom::multi::{many0,many1,separated_list1,separated_list0};
+use nom::combinator::{recognize,all_consuming,opt};
+use nom::multi::{many0,separated_list1,separated_list0};
 
 // We will model an architecture where code and data live in separate address spaces
 // We don't need to have a global pointer because those actually get flattened into memory
@@ -103,7 +103,7 @@ pub fn parse_ir_expr(i: &[u8]) -> IResult<&[u8], IRExpr> {
     ))(i)
 }
 #[cfg(test)]
-mod TestParseIRExpr {
+mod test_parse_ir_expr {
     use crate::*;
     #[test]
     fn check_ir_txpr() {
@@ -182,7 +182,7 @@ pub fn parse_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
 }
 
 #[cfg(test)]
-mod test_parse_arg_List {
+mod test_parse_arg_list {
     use crate::*;
     #[test]
     fn check_args() {
@@ -257,7 +257,7 @@ pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
 }
 pub fn parse_ir_statements(i: &[u8]) -> IResult<&[u8], Vec<IRStatement>> {
     // This needs to eat trailing whitespace as well, but tuple((multispace0,tag("\n"))) seems to stick the \n into the whitespace....
-    separated_list0(tag("\n"),//tuple((multispace0,tag("\n"))), 
+    separated_list0(tuple((opt(tag("\r")),tag("\n"))),//tuple((multispace0,tag("\n"))), 
         parse_ir_statement
         //|x|tuple((parse_ir_statement, 
         //          alt((|y| multispace0(y).map(|(r,_)| (r,())), |y| tuple((multispace0, tag("#"), (is_not("\n")) ))(y).map(|(r,_)| (r,())) )) 
@@ -347,10 +347,10 @@ pub fn parse_control(i: &[u8]) -> IResult<&[u8], ControlXfer> {
     ))(i)
 }
 #[cfg(test)]
-mod TestParseControl {
+mod test_parse_control {
     use crate::*;
     #[test]
-    fn checkControl() {
+    fn check_control() {
         let empty : &[u8] = b"";
         assert_eq!(parse_control("\tjump loophead".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
             Ok((empty, ControlXfer::Jump { block: "loophead" })));
@@ -378,6 +378,7 @@ impl <'a> fmt::Display for BasicBlock<'a> {
                     write!(f, ", ")?;
                 }
                 write!(f, "{}", arg)?;
+                first = false;
             }
             writeln!(f, "):")?;
         }
@@ -401,8 +402,8 @@ pub fn parse_block_arg(i: &[u8]) -> IResult<&[u8], &str> {
 }
 pub fn parse_opt_block_arg_list(i: &[u8]) -> IResult<&[u8], Vec<&str>> {
     alt((
-        |x| tag(":\n")(x).map(|(rest,_)| (rest, vec![])),
-        |x| tuple((tag("("), multispace0, separated_list0(tuple((multispace0,tag(","),multispace0)),parse_block_arg), multispace0, tag("):\n")))(x).map(|(rest,(_,_,args,_,_))| (rest,args))
+        |x| tuple((tag(":"),opt(tag("\r")),tag("\n")))(x).map(|(rest,_)| (rest, vec![])),
+        |x| tuple((tag("("), multispace0, separated_list0(tuple((multispace0,tag(","),multispace0)),parse_block_arg), multispace0, tag("):"), opt(tag("\r")), tag("\n")))(x).map(|(rest,(_,_,args,_,_,_,_))| (rest,args))
     ))(i)
 }
 pub fn parse_basic_block(i: &[u8]) -> IResult<&[u8], BasicBlock> {
@@ -412,10 +413,10 @@ pub fn parse_basic_block(i: &[u8]) -> IResult<&[u8], BasicBlock> {
     ))(i).map(|(rest,(name,formals,prims,ctrl))| (rest,BasicBlock { name: name, instrs: prims, next: ctrl, formals: formals}))
 }
 #[cfg(test)]
-mod TestParseBB {
+mod test_parse_basicblock {
     use crate::*;
     #[test]
-    fn checkBB() {
+    fn check_basicblock() {
         let empty : &[u8] = b"";
         assert_eq!(parse_basic_block("main:\n\t%1 = 10\nret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
             Ok((empty, BasicBlock {
@@ -425,6 +426,21 @@ mod TestParseBB {
                 next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
             })));
         assert_eq!(parse_basic_block("mB(this):\n\tret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
+            Ok((empty, BasicBlock {
+                        name: "mB",
+                        formals: vec!["this"],
+                instrs: vec![],
+                next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
+            })));
+        // Also, windows line endings
+        assert_eq!(parse_basic_block("main:\r\n\t%1 = 10\r\nret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
+            Ok((empty, BasicBlock {
+                        name: "main",
+                        formals: vec![],
+                instrs: vec![IRStatement::VarAssign { lhs: "1", rhs: IRExpr::IntLit { val : 10}}],
+                next: ControlXfer::Ret { val: IRExpr::IntLit { val:0 } }
+            })));
+        assert_eq!(parse_basic_block("mB(this):\r\n\tret 0".as_bytes()).finish().map_err(|nom::error::Error { input: x, code: _}| from_utf8(x).unwrap()),
             Ok((empty, BasicBlock {
                         name: "mB",
                         formals: vec!["this"],
@@ -461,7 +477,7 @@ pub fn parse_global(i: &[u8]) -> IResult<&[u8], GlobalStatic> {
     ))(i).map(|(rest,(_,name,_,vs,_))| (rest,GlobalStatic::Array {name: name, vals: vs}))
 }
 #[cfg(test)]
-mod TestParseGlobal {
+mod test_parse_global {
     use crate::*;
     #[test]
     fn check_global() {
@@ -473,12 +489,12 @@ mod TestParseGlobal {
 
 #[derive(Debug,PartialEq)]
 pub struct IRProgram<'a> {
-    Globals: Vec<GlobalStatic<'a>>,
-    Blocks: HashMap<&'a str, BasicBlock<'a>>
+    globals: Vec<GlobalStatic<'a>>,
+    blocks: HashMap<&'a str, BasicBlock<'a>>
 }
 impl <'a> fmt::Display for IRProgram<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (_,b) in &self.Blocks {
+        for (_,b) in &self.blocks {
             b.fmt(f)?;
         }
         writeln!(f,"")
@@ -487,7 +503,7 @@ impl <'a> fmt::Display for IRProgram<'a> {
 
 
 pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
-    let (rst,_) = tuple((multispace0,tag("data:\n")))(i)?;
+    let (rst,_) = tuple((multispace0,tag("data:"),opt(tag("\r")),tag("\n")))(i)?;
     let mut globals = vec![];
     let mut last_global_parse = parse_global(rst);
     //print!("Initial global parse {:?}", last_global_parse);
@@ -500,7 +516,7 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
     match last_global_parse.finish() {
         Err(nom::error::Error{ input: postglobals, code: _}) => {
             // TODO: figure out what happens with 
-            let (rst2,_) = tuple((multispace0,tag("code:\n")))(postglobals)?;
+            let (rst2,_) = tuple((multispace0,tag("code:"),opt(tag("\r")),tag("\n")))(postglobals)?;
             let mut last_block_parse = parse_basic_block(rst2);
             let mut blocks = vec![];
             while let Ok((remaining2,b)) = last_block_parse {
@@ -521,7 +537,7 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
                             while let Some(b) = blocks.pop() {
                                 bs.insert(b.name, b);
                             }
-                            Ok(("".as_bytes(), IRProgram { Globals: globals, Blocks: bs}))
+                            Ok(("".as_bytes(), IRProgram { globals: globals, blocks: bs}))
                         },
                         Err(nom::error::Error { input: x, code: _}) => {
                             panic!("Leftover text after last parsed block: {}", from_utf8(x).unwrap())
@@ -609,7 +625,7 @@ fn init_memory<'a>(prog: &'a IRProgram) -> (u64,Memory<'a>,Globals<'a>) {
     let mut m : Memory = BTreeMap::new();
     let mut globs : Globals = HashMap::new();
 
-    for g in prog.Globals.iter() {
+    for g in prog.globals.iter() {
         let GlobalStatic::Array { name: n, vals: vs } = g;
         globs.insert(n, next_free);
         for v in vs.iter() {
@@ -620,7 +636,7 @@ fn init_memory<'a>(prog: &'a IRProgram) -> (u64,Memory<'a>,Globals<'a>) {
 
     (next_free,m,globs)
 }
-fn print_memory<'a>(first_mutable: u64, prog: &'a IRProgram, m: &'a Memory<'a>, globs: &'a Globals<'a>) {
+fn print_memory<'a>(first_mutable: u64, _prog: &'a IRProgram, m: &'a Memory<'a>, globs: &'a Globals<'a>) {
     println!("Global Addresses:");
     for (name,addr) in globs.iter() {
         println!("\t@{} -> {}", name, addr)
@@ -636,14 +652,70 @@ fn print_memory<'a>(first_mutable: u64, prog: &'a IRProgram, m: &'a Memory<'a>, 
     }
 }
 
+#[derive(Debug,PartialEq)]
+pub struct ExecStats {
+    // + - & | << >> ^ and also register copies
+    fast_alu_ops: u64,
+    // * /
+    slow_alu_ops: u64,
+    conditional_branches: u64,
+    unconditional_branches: u64,
+    // Currently we'll "ammortize" argument passing into a general call cost
+    calls: u64,
+    rets: u64,
+    mem_reads: u64,
+    mem_writes: u64,
+    // TODO: In the future we may want to track sizes of individual allocations
+    allocs: u64,
+    // Recall: we only print ints, not strings, so it's fixed-cost
+    prints: u64,
+    phis: u64
+}
+impl ExecStats {
+    fn fast_op(&mut self) {
+        self.fast_alu_ops = self.fast_alu_ops + 1
+    }
+    fn slow_op(&mut self) {
+        self.slow_alu_ops = self.slow_alu_ops + 1
+    }
+    fn cond(&mut self) {
+        self.conditional_branches = self.conditional_branches + 1
+    }
+    fn uncond(&mut self) {
+        self.unconditional_branches = self.unconditional_branches + 1
+    }
+    fn call(&mut self) {
+        self.calls = self.calls + 1
+    }
+    fn ret(&mut self) {
+        self.rets = self.rets + 1
+    }
+    fn read(&mut self) {
+        self.mem_reads = self.mem_reads + 1
+    }
+    fn write(&mut self) {
+        self.mem_writes = self.mem_writes + 1
+    }
+    fn alloc(&mut self) {
+        self.allocs = self.allocs + 1
+    }
+    fn print(&mut self) {
+        self.prints = self.prints + 1
+    }
+    fn phi(&mut self) {
+        self.phis = self.phis + 1
+    }
+}
+
 fn expr_val<'a>(l:&Locals<'a>, globs:&Globals<'a>, prog:&IRProgram<'a>, e:&IRExpr<'a>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
     // TODO need globals and program to detect invalid block and global references,
     // and to map global names to locations
     match e {
         IRExpr::IntLit { val: v } => Ok(VirtualVal::Data { val: u64::from(*v) }),
+        // TODO: for now we assume we have infinite registers, so this is "constant"
         IRExpr::Var { id: n } => read_var(l, n),
         IRExpr::BlockRef { bname: b } =>
-            match prog.Blocks.get(b) {
+            match prog.blocks.get(b) {
                 None => Err(RuntimeError::InvalidBlock { bname: b}),
                 Some(_) => Ok(VirtualVal::CodePtr { val: b } )
             },
@@ -664,7 +736,8 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 next_alloc: &mut u64,
                 mut_mem_start: u64,
                 m: &mut Memory<'a>,
-                tracing: bool
+                tracing: bool,
+                mut cycles: &mut ExecStats
             ) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
     // on entry no previous block
     let mut prevblock : Option<&'a str> = None;
@@ -674,11 +747,12 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
             if tracing {
                 println!("Executing: {}", i);
             }
-            let step =
+            let _step =
             match i {
                 IRStatement::Print { out: e } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
                     println!("{}",v);
+                    cycles.print();
                     Ok(())
                 },
                 IRStatement::Alloc { lhs: v, slots: n } => {
@@ -692,10 +766,12 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         *next_alloc = *next_alloc + 8;
                         allocd = allocd + 1;
                     }
+                    cycles.alloc();
                     set_var(&mut locs, v, VirtualVal::Data { val: result })
                 },
                 IRStatement::VarAssign { lhs: var, rhs: e } => {
                     let v = expr_val(&locs, &globs, &prog, &e)?;
+                    cycles.fast_op();
                     set_var(&mut locs, var, v)
                 },
                 IRStatement::Phi { lhs: dest, opts } => {
@@ -712,6 +788,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                             break;
                         }
                     }
+                    cycles.phi();
                     if done {
                         Ok(())
                     } else {
@@ -725,7 +802,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         VirtualVal::CodePtr { val: b } => Ok(b),
                         VirtualVal::Data { .. } => Err(RuntimeError::CallingNonCode)
                     }?;
-                    let target_block = match prog.Blocks.get(target_block_name) {
+                    let target_block = match prog.blocks.get(target_block_name) {
                         Some(b) => Ok(b),
                         None => Err(RuntimeError::InvalidBlock { bname: target_block_name })
                     }?;
@@ -741,7 +818,8 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         set_var(&mut calleevars, target_block.formals[argidx], varg)?;
                         argidx = argidx + 1;
                     }
-                    let callresult = run_code(prog, target_block, calleevars, globs, next_alloc, mut_mem_start, m, tracing)?;
+                    cycles.call();
+                    let callresult = run_code(prog, target_block, calleevars, globs, next_alloc, mut_mem_start, m, tracing, &mut cycles)?;
                     set_var(&mut locs, dest, callresult)
                 },
                 IRStatement::SetElt { base, offset: off, val: v } => {
@@ -754,7 +832,12 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                             match offv {
                                 // TODO: should be different error
                                 VirtualVal::CodePtr { val: offb } => Err(RuntimeError::AccessingCodeInMemory { bname: offb }),
-                                VirtualVal::Data { val: offset } => mem_store(m, mut_mem_start, n+(8*offset), v).map(|_| ())
+                                VirtualVal::Data { val: offset } => {
+                                    cycles.slow_op(); // multiplication
+                                    cycles.fast_op(); // addition
+                                    cycles.write(); // memory access
+                                    mem_store(m, mut_mem_start, n+(8*offset), v).map(|_| ())
+                                }
                             }
                     }
                 },
@@ -768,6 +851,9 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                                 // TODO: should be different error
                                 VirtualVal::CodePtr { val: offb } => Err(RuntimeError::AccessingCodeInMemory { bname: offb }),
                                 VirtualVal::Data { val: offset } => {
+                                    cycles.slow_op(); // multiplication
+                                    cycles.fast_op(); // addition
+                                    cycles.read(); // memory access
                                     let mval = mem_lookup(&m, n+(8*offset))?;
                                     set_var(&mut locs, dest, mval)
                                 }
@@ -779,6 +865,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     match v {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::Data { val: n } => {
+                            cycles.read(); // memory access
                             let memval = mem_lookup(&m, n)?;
                             set_var(&mut locs, dest, memval)
                         }
@@ -790,6 +877,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     match bv {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::Data { val: n } => {
+                            cycles.write(); // memory access
                             mem_store(m, mut_mem_start, n, vv).map(|_| ())
                         }
                     }
@@ -803,18 +891,18 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         (VirtualVal::Data { val: n1 }, VirtualVal::Data { val: n2 }) => 
                             // We've ruled out computing with code addresses, which we don't plan to allow
                             match *o {
-                                "+" => set_var(&mut locs, v, VirtualVal::Data { val: n1+n2 }),
-                                "<<" => set_var(&mut locs, v, VirtualVal::Data { val: n1<<n2 }),
-                                ">>" => set_var(&mut locs, v, VirtualVal::Data { val: n1>>n2 }),
-                                "-" => set_var(&mut locs, v, VirtualVal::Data { val: n1-n2 }),
-                                "/" => set_var(&mut locs, v, VirtualVal::Data { val: n1/n2 }),
-                                "*" => set_var(&mut locs, v, VirtualVal::Data { val: n1*n2 }),
-                                "&" => set_var(&mut locs, v, VirtualVal::Data { val: n1&n2 }),
-                                "|" => set_var(&mut locs, v, VirtualVal::Data { val: n1|n2 }),
-                                "^" => set_var(&mut locs, v, VirtualVal::Data { val: n1^n2 }),
-                                "<" => set_var(&mut locs, v, VirtualVal::Data { val: if n1<n2 { 1 } else {0} }),
-                                ">" => set_var(&mut locs, v, VirtualVal::Data { val: if n1>n2 {1} else {0} }),
-                                "==" => set_var(&mut locs, v, VirtualVal::Data { val: if n1==n2 {1} else {0}}),
+                                "+"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1+n2 }) },
+                                "<<" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1<<n2 }) },
+                                ">>" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1>>n2 }) },
+                                "-"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1-n2 }) },
+                                "/"  => { cycles.slow_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1/n2 }) },
+                                "*"  => { cycles.slow_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1*n2 }) },
+                                "&"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1&n2 }) },
+                                "|"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1|n2 }) },
+                                "^"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1^n2 }) },
+                                "<"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1<n2 { 1 } else {0} }) },
+                                ">"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1>n2 {1} else {0} }) },
+                                "==" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1==n2 {1} else {0}}) },
                                 _ => Err(RuntimeError::NYI) 
                             }
                         
@@ -829,13 +917,15 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
             ControlXfer::Fail {reason: r} => { panic!("Failure: {:?}", r )},
             ControlXfer::Ret { val: e } => {
                 let result = expr_val(&locs, &globs, &prog, &e)?;
+                cycles.ret();
                 finalresult = Some(result);
             },
             ControlXfer::Jump { block: b } => {
-                let target_block = match prog.Blocks.get(b) {
+                let target_block = match prog.blocks.get(b) {
                         Some(b) => Ok(b),
                         None => Err(RuntimeError::InvalidBlockInControl { instr: &cur_block.next, bname: b })
                 }?;
+                cycles.uncond();
                 prevblock = Some(cur_block.name);
                 cur_block = target_block;
             },
@@ -846,10 +936,11 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     VirtualVal::Data { val: 0 } => fblock,
                     _ => tblock
                 };
-                let target_block = match prog.Blocks.get(target_block_name) {
+                let target_block = match prog.blocks.get(target_block_name) {
                         Some(b) => Ok(b),
                         None => Err(RuntimeError::InvalidBlockInControl { instr: &cur_block.next, bname: target_block_name })
                 }?;
+                cycles.cond();
                 prevblock = Some(cur_block.name);
                 cur_block = target_block;
             }
@@ -857,22 +948,21 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
     }
     Ok(finalresult.unwrap())
 }
-fn run_prog<'a>(prog: &'a IRProgram, tracing: bool) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+fn run_prog<'a>(prog: &'a IRProgram, tracing: bool, mut cycles: &mut ExecStats) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
 
-    let main = prog.Blocks.get("main");
+    let main = prog.blocks.get("main");
     if main.is_none() {
         return Err(RuntimeError::MissingMain);
     }
-    let mut cur_block = main.unwrap();
+    let cur_block = main.unwrap();
     let (mut_mem_start, mut m, mut globs) = init_memory(prog);
     if tracing {
         println!("Initial Globals:\n{:?}", globs);
     }
     // mut_mem_start is the starting allocation point, but more importantly is also the dividing line between read-only and writable memory, so we can warn about invalid writes to RO mem
     let mut next_alloc = mut_mem_start;
-    let mut cycles = 0;
     // Run main with an empty variable
-    let fresult = run_code(prog, cur_block, HashMap::new(), &mut globs, &mut next_alloc, mut_mem_start, &mut m, tracing);
+    let fresult = run_code(prog, cur_block, HashMap::new(), &mut globs, &mut next_alloc, mut_mem_start, &mut m, tracing, &mut cycles);
     match &fresult {
         Ok(v) => {
             println!("Final result: {:?}", v);
@@ -886,10 +976,10 @@ fn run_prog<'a>(prog: &'a IRProgram, tracing: bool) -> Result<VirtualVal<'a>,Run
 }
 
 fn check_warnings(prog: &IRProgram) {
-    if !prog.Blocks.contains_key("main") {
+    if !prog.blocks.contains_key("main") {
         println!("WARNING: No main block found");
     }
-    for (_,b) in prog.Blocks.iter() {
+    for (_,b) in prog.blocks.iter() {
         let mut past_phis = false;
         for i in b.instrs.iter() {
             // Check that all phi targets exist
@@ -903,16 +993,16 @@ fn check_warnings(prog: &IRProgram) {
             }
         }
         match &b.next {
-            ControlXfer::If { cond, tblock:t, fblock:f } => {
-                if !prog.Blocks.contains_key(t) {
+            ControlXfer::If { cond: _, tblock:t, fblock:f } => {
+                if !prog.blocks.contains_key(t) {
                     println!("ERROR: next block |{}| in block {} does not exist!", t, b.name);
                 }
-                if !prog.Blocks.contains_key(f) {
+                if !prog.blocks.contains_key(f) {
                     println!("ERROR: next block |{}| in block {} does not exist!", f, b.name);
                 }
             }
             ControlXfer::Jump { block:l } => {
-                if !prog.Blocks.contains_key(l) {
+                if !prog.blocks.contains_key(l) {
                     println!("ERROR: next block |{}| in block {} does not exist!", l, b.name);
                 }
             }
@@ -922,7 +1012,7 @@ fn check_warnings(prog: &IRProgram) {
 }
 
 fn main() -> Result<(),Box<dyn std::error::Error>> {
-    let cmd = std::env::args().nth(1).expect("need subcommand check|exec|compile");
+    let cmd = std::env::args().nth(1).expect("need subcommand [check|exec|trace|perf]");
     let txt = std::env::args().nth(2).expect("441 IR code to process");
 
     let libfile = Path::new(&txt);
@@ -934,19 +1024,27 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     };
     let mut bytes : Vec<u8> = vec![];
     file.read_to_end(&mut bytes)?; 
-    let (leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code }| from_utf8(input).unwrap())?;
+    let (_leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
     let cmd_str = cmd.as_str();
+
+    let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+
     if cmd_str == "check" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
     } else if cmd_str == "exec" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let fresult = run_prog(&prog, false);
+        let _fresult = run_prog(&prog, false, &mut cycles);
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let fresult = run_prog(&prog, true);
+        let _ = run_prog(&prog, true, &mut cycles);
+    } else if cmd_str == "perf" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let _ = run_prog(&prog, false, &mut cycles);
+        println!("Execution stats:\n{:?}", cycles);
     } else {
         panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
     }
