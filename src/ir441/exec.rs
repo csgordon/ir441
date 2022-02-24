@@ -1,6 +1,5 @@
 
 
-use std::fmt;
 use std::collections::{HashMap,BTreeMap};
 
 use crate::ir441::nodes::*;
@@ -17,7 +16,6 @@ pub enum RuntimeError<'a> {
     UnallocatedAddressWrite { addr: u64 },
     UninitializedVariable { name: &'a str },
     MissingMain,
-    UndefinedVariable,
     UndefinedGlobal { name: &'a str },
     CodeAddressArithmetic { bname: &'a str },
     AccessingCodeInMemory { bname: &'a str },

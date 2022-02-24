@@ -8,3 +8,6 @@ edition = "2021"
 
 [dependencies]
 nom = "6.2.1"
+# This requires setting LLVM_SYS_130_PREFIX to the base of an LLVM 13.0 build, as required by inkwell's llvm-ir dependency
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm13-0"] }
+either = "1.6.1"

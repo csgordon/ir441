@@ -1,0 +1,6 @@
+data:
+code:
+
+main:
+  %3 = 10 + 27
+  ret %3

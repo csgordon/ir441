@@ -1,0 +1,14 @@
+data:
+code:
+
+main(x):
+  %x = 10
+  jump loophead
+loophead:
+  if %x then body else finish
+body:
+  print(%cnt)
+  %x = %x - 1
+  jump loophead
+finish:
+  ret 0

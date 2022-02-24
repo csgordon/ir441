@@ -1,0 +1,13 @@
+data:
+code:
+
+main(blah):
+  %blah = 10
+  jump loophead
+loophead:
+  if %blah then body else finish
+body:
+  %blah = %blah - 1
+  jump loophead
+finish:
+  ret 0

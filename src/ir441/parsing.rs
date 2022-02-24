@@ -1,7 +1,6 @@
 
 extern crate nom;
-use std::fmt;
-use std::collections::{HashMap,BTreeMap};
+use std::collections::{HashMap};
 
 use crate::ir441::nodes::*;
 use nom::{IResult,Finish};

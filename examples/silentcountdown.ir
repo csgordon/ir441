@@ -1,0 +1,14 @@
+data:
+code:
+
+main:
+  %1 = 10
+  jump loophead
+loophead:
+  %cnt = phi(main, %1, body, %2)
+  if %cnt then body else finish
+body:
+  %2 = %cnt - 1
+  jump loophead
+finish:
+  ret 0
