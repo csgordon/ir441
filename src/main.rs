@@ -63,7 +63,12 @@ fn compile_statement<'ctx,'b,'a>(context: &'ctx Context, builder: &'b Builder<'c
                     };
             // DEBUG
             res.print_to_stderr();
-            vars.insert(lhs, Either::Right(res.as_basic_value_enum()));
+            if let Some(Either::Left(ptr)) = vars.get(lhs) {
+                builder.build_store(*ptr, res);
+            } else {
+                // Not in there as a pointer, so we just need the subsequent lookup
+                vars.insert(lhs, Either::Right(res.as_basic_value_enum()));
+            }
         },
         IRStatement::VarAssign{lhs,rhs} => {
             let e = compile_expr(&context, &builder, &vars, &rhs)?.into_int_value();
@@ -141,22 +146,30 @@ fn compile_function<'ctx,'b,'a>(prog: &'a IRProgram, module: &'b Module<'ctx>, c
 
     // TODO: This is inefficient, we do this for every function, and blocks includes *all* functions
     let mut block_asgns = HashMap::new();
+    for name in b.formals.iter() {
+        block_asgns.insert(name, 1);
+    }
     for (name, b) in prog.blocks.iter() {
-        let mut asgns = HashSet::new();
         for i in b.instrs.iter() {
-            match i {
-                // ehh, this should be swapped to just count assignments for every lhs, not compute the sets, which I don't actually need
-                IRStatement::Alloc{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::Call{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::GetElt{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::Load{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::Op{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::Phi{lhs, ..} => {asgns.insert(lhs);},
-                IRStatement::VarAssign{lhs, ..} => {asgns.insert(lhs);},
-                _ => {}
+            if let Some(var) = match i {
+                            // ehh, this should be swapped to just count assignments for every lhs, not compute the sets, which I don't actually need
+                            IRStatement::Alloc{lhs, ..} =>      Some(lhs),
+                            IRStatement::Call{lhs, ..} =>       Some(lhs),
+                            IRStatement::GetElt{lhs, ..} =>     Some(lhs),
+                            IRStatement::Load{lhs, ..} =>       Some(lhs),
+                            IRStatement::Op{lhs, ..} =>         Some(lhs),
+                            IRStatement::Phi{lhs, ..} =>        Some(lhs),
+                            IRStatement::VarAssign{lhs, ..} =>  Some(lhs),
+                            _ => None
+                            } {
+                if let Some(cnt) = block_asgns.get_mut(var) {
+                    *cnt = *cnt + 1;
+                    println!("Found multiple writes to {}", var);
+                } else {
+                    block_asgns.insert(var, 1);
+                }
             }
         }
-        block_asgns.insert(name, asgns);
     }
 
 
@@ -167,10 +180,24 @@ fn compile_function<'ctx,'b,'a>(prog: &'a IRProgram, module: &'b Module<'ctx>, c
     let mut vars : HashMap<&'a str,Either<PointerValue<'ctx>,BasicValueEnum<'ctx>>> = HashMap::new();
     vars.reserve(b.formals.len());
     for (i, arg) in f.get_param_iter().enumerate() {
-        let alloca = builder.build_alloca(context.i64_type(), b.formals[i]);
-        builder.build_store(alloca, arg);
-        vars.insert(b.formals[i], Either::Left(alloca));
+        if (*block_asgns.get(&b.formals[i]).unwrap() > 1) {
+            let alloca = builder.build_alloca(context.i64_type(), b.formals[i]);
+            builder.build_store(alloca, arg);
+            vars.insert(b.formals[i], Either::Left(alloca));
+        }
     }
+    for (name, cnt) in block_asgns.iter() {
+        if !vars.contains_key(*name) {
+            let tmp = block_asgns.get(*name);
+            if (tmp.is_some() && *tmp.unwrap() > 1) {
+                // Not an argument, so allocate but no initial store is needed
+                let alloca = builder.build_alloca(context.i64_type(), *name);
+                vars.insert(*name, Either::Left(alloca));
+            }
+        }
+    }
+    // Now vars contains allocations for all variables that are overwritten.
+    // Stores should then be tweaked to update those locations with the appropriate value
 
     // Don't just reuse compile_basic_block, because 
     //compile_basic_block(f, &module, &context, &builder, &mut blocks, &mut vars, &b)?;
@@ -283,8 +310,20 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
         let context = Context::create();
         let module = context.create_module(&txt);
         let builder = context.create_builder();
-        let fmain = compile_function(&prog, &module, &context, &builder, prog.blocks.get("main").unwrap())?;
-        fmain.print_to_stderr();
+        for (name, entry) in prog.blocks.iter() {
+            // Strictly speaking we should have a more robust way to identify function entry points, but
+            // since our language only has instance methods with explicit 'this' params, this is
+            // effective.
+            // Note that some students choose to emit only a single error block for each kind of error,
+            // for their whole program. Doing this function-at-a-time means we will actually
+            // traverse all reachable blocks for each function, in effect duplicating those error-handling
+            // blocks for each function that needs them in the LLVM IR, where blocks are grouped by function.
+            if (*name == "main" || entry.formals.len() > 0) {
+                compile_function(&prog, &module, &context, &builder, entry)?;
+            }
+        }
+        //fmain.print_to_stderr();
+        module.print_to_stderr();
     } else {
         panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
     }
