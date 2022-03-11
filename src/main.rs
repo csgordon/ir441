@@ -1,3 +1,4 @@
+#![feature(is_some_with)]
 // We'll just hack it all together in one file for now
 extern crate nom;
 mod ir441;
@@ -80,15 +81,15 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     } else if cmd_str == "exec" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, false, &mut cycles);
+        let _fresult = run_prog(&prog, false, &mut cycles, None);
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, true, &mut cycles);
+        let _ = run_prog(&prog, true, &mut cycles, None);
     } else if cmd_str == "perf" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, false, &mut cycles);
+        let _ = run_prog(&prog, false, &mut cycles, None);
         println!("Execution stats:\n{:?}", cycles);
     } else {
         panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);

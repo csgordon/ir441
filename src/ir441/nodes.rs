@@ -6,13 +6,23 @@ use std::collections::{HashMap,BTreeMap};
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum VirtualVal<'a> {
     Data { val: u64 },
-    CodePtr { val: &'a str }
+    CodePtr { val: &'a str },
+    GCTombstone
 }
 impl <'a> fmt::Display for VirtualVal<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VirtualVal::Data { val } => write!(f, "{}", val),
-            VirtualVal::CodePtr { val } => write!(f, "{}", val)
+            VirtualVal::CodePtr { val } => write!(f, "{}", val),
+            VirtualVal::GCTombstone => write!(f, "GCTombstone")
+        }
+    }
+}
+impl <'a> VirtualVal<'a> {
+    pub fn as_u64_or_else<E,F>(&self, f:F) -> Result<u64,E> where F: FnOnce(&VirtualVal<'a>) -> E {
+        match *self {
+            VirtualVal::Data{val} => Ok(val),
+            _ => Err(f(self))
         }
     }
 }
