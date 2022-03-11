@@ -1,5 +1,5 @@
 use std::fmt;
-use std::collections::{HashMap,BTreeMap};
+use std::collections::{HashMap,BTreeMap,HashSet};
 
 use crate::ir441::nodes::*;
 
@@ -69,6 +69,9 @@ struct Memory<'a> {
     slot_cap: ExecMode,
     /// How many slots *are* allocated in the current allocation space
     slots_alloced: u64,
+    /// Allocated object addresses, used to filter GC roots without a stack map.
+    /// This does result in semi-conservative GC since we can occasionally mistake an int for a valid pointer, but it's unlikely to persist beyond a single GC cycle.
+    allocations: HashSet<u64>,
 }
 type Locals<'a> = HashMap<&'a str, VirtualVal<'a>>;
 type Globals<'a> = HashMap<&'a str, u64>;
@@ -95,7 +98,8 @@ impl <'a> Memory<'a> {
                     base: next_free,
                     next_alloc: next_free,
                     slot_cap,
-                    slots_alloced: 0
+                    slots_alloced: 0,
+                    allocations: HashSet::new()
                 };
         (mem,globs)
     }
@@ -111,18 +115,22 @@ impl <'a> Memory<'a> {
         // TODO: Hmm, I need *all* locals... I need this to handle stuff from earlier stack frames....
         let new_base = self.next_alloc;
         let was_alloced = self.slots_alloced;
+        // Snapshot old allocations and clear them for the next GC
+        let old_allocations = self.allocations.clone();
+        self.allocations.clear();
+        self.allocations = HashSet::new();
         self.slots_alloced = 0;
         for (x,v) in locals.iter_mut() {
             println!("Tracing from root: {}={}", x, v);
             match v {
                 VirtualVal::CodePtr {val} => (),
                 VirtualVal::Data {val} => {
-                    if self.map.contains_key(val) {
+                    if old_allocations.contains(val) {
                         let newloc = self.trace(*val)?;
                         println!("Moved {} from {} to {}", x, val, newloc);
                         *v = VirtualVal::Data {val : newloc};
                     } else {
-                        println!("Assuming {} is just an integer since variables aren't tagged", val);
+                        println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
                     }
                 },
                 VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
@@ -135,6 +143,7 @@ impl <'a> Memory<'a> {
         }
         self.base = new_base;
         println!("Updated semispace base to {}, next alloc at {}", self.base, self.next_alloc);
+        println!("Reduced memory consumption from {} to {} slots", was_alloced, self.slots_alloced);
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
@@ -236,6 +245,7 @@ impl <'a> Memory<'a> {
             allocd = allocd + 1;
         }
         self.slots_alloced = self.slots_alloced + allocd;
+        self.allocations.insert(result);
         Ok(result)
     }
 
