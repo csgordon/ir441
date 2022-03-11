@@ -1,0 +1,59 @@
+data:
+
+code:
+
+main:
+  %a = alloc(3)
+  setelt(%a, 0, 0)
+  %b = alloc(2)
+  setelt(%b, 0, 0)
+  %c = alloc(2)
+  setelt(%c, 0, 0)
+  %d = alloc(2)
+  setelt(%d, 0, 0)
+  
+  setelt(%a, 1, %b)
+  setelt(%a, 2, %c)
+  setelt(%b, 1, %d)
+  setelt(%c, 1, %d)
+  setelt(%d, 1, 47)
+
+  %amap = %a - 8
+  %bmap = %b - 8
+  %cmap = %c - 8
+  %dmap = %d - 8
+
+  store(%amap, 6)
+  store(%bmap, 2)
+  store(%cmap, 2)
+  store(%dmap, 0)
+
+  %amap = 0
+  %bmap = 0
+  %cmap = 0
+  %dmap = 0
+
+  %cnt = 10
+  jump loopheader
+
+loopheader:
+  if %cnt then doalloc else finish
+
+doalloc:
+  %cnt = %cnt - 1
+  %blah = alloc(10)
+  jump loopheader
+
+finish:
+  setelt(%d, 1, 4096)
+
+  %b2 = getelt(%a, 1)
+  %dViab = getelt(%b2, 1)
+  %c2 = getelt(%a, 2)
+  %dViac = getelt(%c2, 1)
+  %dvalViab = getelt(%dViab, 1)
+  print(%dvalViab)
+  %dvalViac = getelt(%dViac, 1)
+  print(%dvalViac)
+  ret 0
+

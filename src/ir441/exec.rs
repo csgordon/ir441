@@ -113,13 +113,17 @@ impl <'a> Memory<'a> {
         let was_alloced = self.slots_alloced;
         self.slots_alloced = 0;
         for (x,v) in locals.iter_mut() {
-            println!("Tracing from root: {}", x);
+            println!("Tracing from root: {}={}", x, v);
             match v {
                 VirtualVal::CodePtr {val} => (),
                 VirtualVal::Data {val} => {
-                    let newloc = self.trace(*val)?;
-                    println!("Moved {} from {} to {}", x, val, newloc);
-                    *v = VirtualVal::Data {val : newloc};
+                    if self.map.contains_key(val) {
+                        let newloc = self.trace(*val)?;
+                        println!("Moved {} from {} to {}", x, val, newloc);
+                        *v = VirtualVal::Data {val : newloc};
+                    } else {
+                        println!("Assuming {} is just an integer since variables aren't tagged", val);
+                    }
                 },
                 VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
             }
@@ -171,7 +175,10 @@ impl <'a> Memory<'a> {
                     // Set new forwarding pointer to 0
                     self.mem_store(new_metadata_loc+8, VirtualVal::Data{val:0})?;
                     self.mem_store(new_metadata_loc+16, slotmapv)?;
+                    // Compute new program address for object's moved version
                     let new_obj_base = new_metadata_loc + 24;
+                    // Set forwarding pointer
+                    self.mem_store(fwd_ptr_loc, VirtualVal::Data { val: new_obj_base })?;
                     // Iterate through the fields and slot map in parallel
                     for i in 0..(allocsize - 3) {
                         // recursively copy or trace from addr[i] to new_obj_base[i]
@@ -184,6 +191,7 @@ impl <'a> Memory<'a> {
                                             VirtualVal::Data{val:to_trace} => self.trace(to_trace)
                                           }?;
                             self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
+                            println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
                         } else {
                             // blind copy
                             self.mem_store(new_obj_base + i*8, orig)?;
