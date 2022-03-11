@@ -103,18 +103,22 @@ impl <'a> Memory<'a> {
     fn gc(&mut self, locals: &mut Locals<'a>) -> Result<(),RuntimeError<'a>> {
         if !self.slot_cap.is_gc() {
             panic!("Error: GC triggered in a mode where GC header is not allocated!");
+        } else {
+            println!("Beginning GC")
         }
         // Simple copying collector.
-        // Hard limit of 64 slots (including vtbl)
+        // Hard limit of 64 slots (including vtbl) due to width of slotmap
         // TODO: Hmm, I need *all* locals... I need this to handle stuff from earlier stack frames....
         let new_base = self.next_alloc;
         let was_alloced = self.slots_alloced;
         self.slots_alloced = 0;
         for (x,v) in locals.iter_mut() {
+            println!("Tracing from root: {}", x);
             match v {
                 VirtualVal::CodePtr {val} => (),
                 VirtualVal::Data {val} => {
                     let newloc = self.trace(*val)?;
+                    println!("Moved {} from {} to {}", x, val, newloc);
                     *v = VirtualVal::Data {val : newloc};
                 },
                 VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
@@ -123,9 +127,10 @@ impl <'a> Memory<'a> {
         // After relocating, wipe everything from the old base to the start of the new "semispace" with tombstones for debugging
         // TODO: Eventually, actually remove these and adjust lookup to automatically return tombstone for anything in the GC'ed range (i.e., between first_writable and )
         for loc in (self.base..new_base).step_by(8) {
-            self.mem_store(loc, VirtualVal::GCTombstone)?;
+            self.map.insert(loc, VirtualVal::GCTombstone);
         }
         self.base = new_base;
+        println!("Updated semispace base to {}, next alloc at {}", self.base, self.next_alloc);
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
@@ -146,9 +151,11 @@ impl <'a> Memory<'a> {
         let allocsize_loc = addr - 3*8;
         let fwd_ptr_loc = addr - 2*8;
         let slotmap_loc = addr - 8;
+        println!("GC Tracing of {}", addr);
         match self.map.get(&fwd_ptr_loc) {
             None => Err(RuntimeError::UnallocatedAddressRead { addr }),
             Some(VirtualVal::Data {val}) => {
+                println!("Found address {} forwarded to {}", addr, val);
                 if *val != 0 {
                     assert!(self.map.contains_key(val));
                     Ok(*val)
@@ -158,6 +165,7 @@ impl <'a> Memory<'a> {
                     let allocsize = allocsizev.as_u64_or_else(|v| RuntimeError::CorruptGCMetadata {val:*v })?;
                     let slotmapv = *self.map.get(&slotmap_loc).ok_or_else(|| RuntimeError::UnallocatedAddressRead { addr })?;
                     let mut slotmap = slotmapv.as_u64_or_else(|v| RuntimeError::CorruptGCMetadata {val:*v })?;
+                    println!("Tracing {} with alloc size {} and slotmap {:X}", addr, allocsize, slotmap);
                     let new_metadata_loc = self.reserve(allocsize)?;
                     self.mem_store(new_metadata_loc, allocsizev)?;
                     // Set new forwarding pointer to 0
@@ -200,8 +208,17 @@ impl <'a> Memory<'a> {
             println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
         }
 
-        // reserve n addresses at 8-byte offsets from next alloc
-        self.next_alloc = self.next_alloc + 8; // Skip 8 bytes to catch some memory errors
+        // Skip 8 bytes to catch some memory errors
+        self.next_alloc = self.next_alloc + 8;
+        if self.slot_cap != ExecMode::Unlimited {
+            // Reserve GC header space
+            // Technically unnecessary when running with limits but without GC
+            self.map.insert(self.next_alloc, VirtualVal::Data { val: n+3 });
+            self.map.insert(self.next_alloc+8, VirtualVal::Data { val: 0 });
+            self.map.insert(self.next_alloc+16, VirtualVal::Data { val: 0 });
+            self.next_alloc = self.next_alloc + 24;
+            self.slots_alloced = self.slots_alloced + 3;
+        }
         let result = self.next_alloc;
         let mut allocd = 0;
         while allocd < n {
@@ -391,6 +408,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         set_var(&mut locs, v, VirtualVal::Data { val: result.unwrap() })
                     } else if result.is_err_with(|e| match e { RuntimeError::GCRequired => true, _ => false}){
                         // GC, then try again
+                        println!("Triggering GC");
                         m.gc(&mut locs)?;
                         let result = m.alloc((*n).into());
                         match result {
