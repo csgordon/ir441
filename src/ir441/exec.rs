@@ -5,9 +5,24 @@ use crate::ir441::nodes::*;
 
 #[derive(Debug,PartialEq)]
 pub enum ExecMode {
-    Normal,
-    MemCap { limit: i32 },
-    GC
+    Unlimited,
+    MemCap { limit: u64 },
+    GC { limit: u64 }
+}
+impl ExecMode {
+    fn effective_cap(&self) -> u64 {
+        match self {
+            ExecMode::Unlimited => u64::MAX,
+            ExecMode::MemCap {limit} => *limit,
+            ExecMode::GC {limit} => *limit
+        }
+    }
+    fn is_gc(&self) -> bool {
+        match self {
+            ExecMode::GC{..} => true,
+            _ => false
+        }
+    }
 }
 
 #[derive(Debug,PartialEq)]
@@ -51,7 +66,7 @@ struct Memory<'a> {
     /// Next unallocated address
     next_alloc: u64,
     /// Optionally, a limit on how many slots can be allocated
-    slot_cap: Option<u64>,
+    slot_cap: ExecMode,
     /// How many slots *are* allocated in the current allocation space
     slots_alloced: u64,
 }
@@ -60,7 +75,7 @@ type Globals<'a> = HashMap<&'a str, u64>;
 
 impl <'a> Memory<'a> {
     // Okay, a little weird for this to also allocate the globals, but whatever
-    fn new(prog: &'a IRProgram, slot_cap: Option<u64>) -> (Memory<'a>,Globals<'a>) {
+    fn new(prog: &'a IRProgram, slot_cap: ExecMode) -> (Memory<'a>,Globals<'a>) {
         let mut next_free : u64 = 32;
         let mut m : BTreeMap<u64,VirtualVal<'a>> = BTreeMap::new();
         let mut globs : Globals = HashMap::new();
@@ -86,7 +101,7 @@ impl <'a> Memory<'a> {
     }
 
     fn gc(&mut self, locals: &mut Locals<'a>) -> Result<(),RuntimeError<'a>> {
-        if self.slot_cap.is_none() {
+        if !self.slot_cap.is_gc() {
             panic!("Error: GC triggered in a mode where GC header is not allocated!");
         }
         // Simple copying collector.
@@ -114,7 +129,7 @@ impl <'a> Memory<'a> {
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
-        if self.slots_alloced + slots_including_metadata > self.slot_cap.unwrap_or(u64::MAX) {
+        if self.slots_alloced + slots_including_metadata > self.slot_cap.effective_cap() {
             return Err(RuntimeError::OutOfMemory)
         }
         let metadata_base = self.next_alloc;
@@ -174,11 +189,15 @@ impl <'a> Memory<'a> {
         }
 
     }
-    fn alloc(&mut self, locals: &Locals<'a>, n:u64) -> Result<u64,RuntimeError<'a>> {
-        if !self.slot_cap.is_none() {
-            if self.slots_alloced + n + 1 > self.slot_cap.unwrap() {
-                return Err(RuntimeError::GCRequired);
+    fn alloc(&mut self, n:u64) -> Result<u64,RuntimeError<'a>> {
+        if self.slot_cap != ExecMode::Unlimited && self.slots_alloced + n + 1 > self.slot_cap.effective_cap() {
+            match self.slot_cap {
+                ExecMode::Unlimited => {return Ok(0)}, // unreachable since we checked it's not unlimited
+                ExecMode::MemCap{..} => {return Err(RuntimeError::OutOfMemory)},
+                ExecMode::GC{..} => {return Err(RuntimeError::GCRequired)},
             }
+        } else {
+            println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
         }
 
         // reserve n addresses at 8-byte offsets from next alloc
@@ -191,6 +210,7 @@ impl <'a> Memory<'a> {
             self.next_alloc = self.next_alloc + 8;
             allocd = allocd + 1;
         }
+        self.slots_alloced = self.slots_alloced + allocd;
         Ok(result)
     }
 
@@ -364,14 +384,15 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     Ok(())
                 },
                 IRStatement::Alloc { lhs: v, slots: n } => {
-                    let result = m.alloc(&locs, (*n).into());
+                    let result = m.alloc((*n).into());
                     if (result.is_ok()) {
+                        println!("Successful alloc");
                         cycles.alloc();
                         set_var(&mut locs, v, VirtualVal::Data { val: result.unwrap() })
                     } else if result.is_err_with(|e| match e { RuntimeError::GCRequired => true, _ => false}){
                         // GC, then try again
                         m.gc(&mut locs)?;
-                        let result = m.alloc(&locs, (*n).into());
+                        let result = m.alloc((*n).into());
                         match result {
                             Err(RuntimeError::GCRequired) => Err(RuntimeError::OutOfMemory),
                             Err(_) => result.map(|_| ()),
@@ -572,7 +593,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
     }
     Ok(finalresult.unwrap())
 }
-pub fn run_prog<'a>(prog: &'a IRProgram, tracing: bool, mut cycles: &mut ExecStats, cap:Option<u64>) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+pub fn run_prog<'a>(prog: &'a IRProgram, tracing: bool, mut cycles: &mut ExecStats, cap:ExecMode) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
 
     let main = prog.blocks.get("main");
     if main.is_none() {

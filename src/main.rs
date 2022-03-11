@@ -81,15 +81,23 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     } else if cmd_str == "exec" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, false, &mut cycles, None);
+        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+    } else if cmd_str == "exec-fixedmem" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let _fresult = run_prog(&prog, true, &mut cycles, ExecMode::MemCap {limit:100});
+    } else if cmd_str == "exec-gc" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::GC {limit:100});
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, true, &mut cycles, None);
+        let _ = run_prog(&prog, true, &mut cycles, ExecMode::Unlimited);
     } else if cmd_str == "perf" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, false, &mut cycles, None);
+        let _ = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
         println!("Execution stats:\n{:?}", cycles);
     } else {
         panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);

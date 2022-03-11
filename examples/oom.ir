@@ -1,0 +1,8 @@
+data:
+
+code:
+
+main:
+  %x0 = alloc(10)
+  jump main
+
