@@ -6,6 +6,7 @@ mod ir441;
 use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::{self, BufReader};
 use std::path::Path;
 use std::collections::{HashMap,BTreeMap};
 
@@ -59,17 +60,21 @@ fn check_warnings(prog: &IRProgram) {
 
 fn main() -> Result<(),Box<dyn std::error::Error>> {
     let cmd = std::env::args().nth(1).expect("need subcommand [check|exec|trace|perf]");
-    let txt = std::env::args().nth(2).expect("441 IR code to process");
-
-    let libfile = Path::new(&txt);
-    let display = libfile.display();
-
-    let mut file = match File::open(&txt) {
-        Err(why) => panic!("Couldn't open {}: {}", display, why),
-        Ok(file) => file,
+    let txt = std::env::args().nth(2);
+    let mut reader: Box<dyn BufRead> = match txt {
+        None => Box::new(BufReader::new(io::stdin())),
+        Some(filepath) => {
+            let libfile = Path::new(&filepath);
+            let display = libfile.display();
+            match File::open(&filepath) {
+                Err(why) => panic!("Couldn't open {}: {}", display, why),
+                Ok(file) => Box::new(BufReader::new(file)),
+            }
+        }
     };
+
     let mut bytes : Vec<u8> = vec![];
-    file.read_to_end(&mut bytes)?; 
+    reader.read_to_end(&mut bytes)?; 
     let (_leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
     let cmd_str = cmd.as_str();
 
