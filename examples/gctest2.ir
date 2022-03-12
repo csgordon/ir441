@@ -3,6 +3,13 @@ data:
 code:
 
 main:
+  # Allocate for a diamond structure
+  # We'll set up for:
+  #   a
+  #  / \
+  # b   c
+  #  \ /
+  #   d
   %a = alloc(3)
   setelt(%a, 0, 0)
   %b = alloc(2)
@@ -12,22 +19,26 @@ main:
   %d = alloc(2)
   setelt(%d, 0, 0)
   
+  # Create the diamond shape
   setelt(%a, 1, %b)
   setelt(%a, 2, %c)
   setelt(%b, 1, %d)
   setelt(%c, 1, %d)
   setelt(%d, 1, 47)
 
+  # get addresses for the slot maps for the GC
   %amap = %a - 8
   %bmap = %b - 8
   %cmap = %c - 8
   %dmap = %d - 8
 
+  # Init a's slot map to b110 (6), b and c's to b010 (2), and d's to 0
   store(%amap, 6)
   store(%bmap, 2)
   store(%cmap, 2)
   store(%dmap, 0)
 
+  # Now we allocate enough to trigger a GC
   %cnt = 10
   jump loopheader
 
@@ -40,12 +51,18 @@ doalloc:
   jump loopheader
 
 finish:
+  # At this point we've triggered a GC, which should have
+  # preserved the diamond shape.
+  # To check this we'll directly update d's value to 4096...
   setelt(%d, 1, 4096)
 
+  # ... then check that following either path from a observes the same value
   %b2 = getelt(%a, 1)
   %dViab = getelt(%b2, 1)
   %c2 = getelt(%a, 2)
   %dViac = getelt(%c2, 1)
+
+  # ... where by "check" we mean print for visual inspection
   %dvalViab = getelt(%dViab, 1)
   print(%dvalViab)
   %dvalViac = getelt(%dViac, 1)

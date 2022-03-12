@@ -5,7 +5,7 @@ use std::collections::{HashMap,BTreeMap};
 
 use crate::ir441::nodes::*;
 use nom::{IResult,Finish};
-use nom::bytes::complete::{tag};
+use nom::bytes::complete::{tag,is_not};
 use nom::branch::{alt};
 use nom::character::complete::{digit1,alpha1,multispace1, multispace0,alphanumeric1};
 use nom::sequence::{tuple,pair};
@@ -81,6 +81,29 @@ pub fn parse_full_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
 }
 pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
+    let (i,_) = multispace0(i)?;
+    // This is a dumb hack, but we'll just hard-code for up to 10 comments...
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = multispace0(i)?;
+    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
     alt((
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parse_phi_arg_list))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,IRStatement::Phi { lhs: l, opts: a1 })),
