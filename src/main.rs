@@ -95,6 +95,10 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
         let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::GC {limit:100});
+    } else if cmd_str == "exec-gc-logging" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::GC {limit:100});
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
@@ -105,7 +109,8 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
         let _ = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
         println!("Execution stats:\n{:?}", cycles);
     } else {
-        panic!("Unsupported command (possibly not-yet-implemented): {}", cmd);
+        println!("Unsupported command (possibly not-yet-implemented): {}", cmd);
+        panic!("Usage: ir441 (check|exec|exec-fixedmem|exec-gc|exec-gc-logging|trace|perf)");
     }
     
     Ok(())

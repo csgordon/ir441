@@ -7,19 +7,28 @@ use crate::ir441::nodes::*;
 pub enum ExecMode {
     Unlimited,
     MemCap { limit: u64 },
-    GC { limit: u64 }
+    GC { limit: u64 },
+    LoggingGC { limit: u64 }
 }
 impl ExecMode {
     fn effective_cap(&self) -> u64 {
         match self {
             ExecMode::Unlimited => u64::MAX,
             ExecMode::MemCap {limit} => *limit,
-            ExecMode::GC {limit} => *limit
+            ExecMode::GC {limit} => *limit,
+            ExecMode::LoggingGC {limit} => *limit
         }
     }
     fn is_gc(&self) -> bool {
         match self {
             ExecMode::GC{..} => true,
+            ExecMode::LoggingGC{..} => true,
+            _ => false
+        }
+    }
+    fn is_logging_gc(&self) -> bool {
+        match self {
+            ExecMode::LoggingGC{..} => true,
             _ => false
         }
     }
@@ -107,7 +116,7 @@ impl <'a> Memory<'a> {
     fn gc(&mut self, locals: &mut Locals<'a>) -> Result<(),RuntimeError<'a>> {
         if !self.slot_cap.is_gc() {
             panic!("Error: GC triggered in a mode where GC header is not allocated!");
-        } else {
+        } else if self.slot_cap.is_logging_gc() {
             println!("Beginning GC")
         }
         // Simple copying collector.
@@ -121,16 +130,22 @@ impl <'a> Memory<'a> {
         self.allocations = HashSet::new();
         self.slots_alloced = 0;
         for (x,v) in locals.iter_mut() {
-            println!("Tracing from root: {}={}", x, v);
+            if self.slot_cap.is_logging_gc() {
+                println!("Tracing from root: {}={}", x, v);
+            }
             match v {
                 VirtualVal::CodePtr {val} => (),
                 VirtualVal::Data {val} => {
                     if old_allocations.contains(val) {
                         let newloc = self.trace(*val)?;
-                        println!("Moved {} from {} to {}", x, val, newloc);
+                        if self.slot_cap.is_logging_gc() {
+                            println!("Moved {} from {} to {}", x, val, newloc);
+                        }
                         *v = VirtualVal::Data {val : newloc};
                     } else {
-                        println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
+                        if self.slot_cap.is_logging_gc() {
+                            println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
+                        }
                     }
                 },
                 VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
@@ -142,8 +157,10 @@ impl <'a> Memory<'a> {
             self.map.insert(loc, VirtualVal::GCTombstone);
         }
         self.base = new_base;
-        println!("Updated semispace base to {}, next alloc at {}", self.base, self.next_alloc);
-        println!("Reduced memory consumption from {} to {} slots", was_alloced, self.slots_alloced);
+        if self.slot_cap.is_logging_gc() {
+            println!("Updated semispace base to {}, next alloc at {}", self.base, self.next_alloc);
+            println!("Reduced memory consumption from {} to {} slots", was_alloced, self.slots_alloced);
+        }
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
@@ -164,11 +181,15 @@ impl <'a> Memory<'a> {
         let allocsize_loc = addr - 3*8;
         let fwd_ptr_loc = addr - 2*8;
         let slotmap_loc = addr - 8;
-        println!("GC Tracing of {}", addr);
+        if self.slot_cap.is_logging_gc() {
+            println!("GC Tracing of {}", addr);
+        }
         match self.map.get(&fwd_ptr_loc) {
             None => Err(RuntimeError::UnallocatedAddressRead { addr }),
             Some(VirtualVal::Data {val}) => {
-                println!("Found address {} forwarded to {}", addr, val);
+                if self.slot_cap.is_logging_gc() {
+                    println!("Found address {} forwarded to {}", addr, val);
+                }
                 if *val != 0 {
                     assert!(self.map.contains_key(val));
                     Ok(*val)
@@ -178,7 +199,9 @@ impl <'a> Memory<'a> {
                     let allocsize = allocsizev.as_u64_or_else(|v| RuntimeError::CorruptGCMetadata {val:*v })?;
                     let slotmapv = *self.map.get(&slotmap_loc).ok_or_else(|| RuntimeError::UnallocatedAddressRead { addr })?;
                     let mut slotmap = slotmapv.as_u64_or_else(|v| RuntimeError::CorruptGCMetadata {val:*v })?;
-                    println!("Tracing {} with alloc size {} and slotmap {:X}", addr, allocsize, slotmap);
+                    if self.slot_cap.is_logging_gc() {
+                        println!("Tracing {} with alloc size {} and slotmap {:X}", addr, allocsize, slotmap);
+                    }
                     let new_metadata_loc = self.reserve(allocsize)?;
                     self.mem_store(new_metadata_loc, allocsizev)?;
                     // Set new forwarding pointer to 0
@@ -200,7 +223,9 @@ impl <'a> Memory<'a> {
                                             VirtualVal::Data{val:to_trace} => self.trace(to_trace)
                                           }?;
                             self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
-                            println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                            if self.slot_cap.is_logging_gc() {
+                                println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                            }
                         } else {
                             // blind copy
                             self.mem_store(new_obj_base + i*8, orig)?;
@@ -220,9 +245,12 @@ impl <'a> Memory<'a> {
                 ExecMode::Unlimited => {return Ok(0)}, // unreachable since we checked it's not unlimited
                 ExecMode::MemCap{..} => {return Err(RuntimeError::OutOfMemory)},
                 ExecMode::GC{..} => {return Err(RuntimeError::GCRequired)},
+                ExecMode::LoggingGC{..} => {return Err(RuntimeError::GCRequired)},
             }
         } else {
-            println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
+            if self.slot_cap.is_logging_gc() {
+                println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
+            }
         }
 
         // Skip 8 bytes to catch some memory errors
@@ -421,12 +449,13 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 IRStatement::Alloc { lhs: v, slots: n } => {
                     let result = m.alloc((*n).into());
                     if (result.is_ok()) {
-                        println!("Successful alloc");
                         cycles.alloc();
                         set_var(&mut locs, v, VirtualVal::Data { val: result.unwrap() })
                     } else if result.is_err_with(|e| match e { RuntimeError::GCRequired => true, _ => false}){
                         // GC, then try again
-                        println!("Triggering GC");
+                        if m.slot_cap.is_logging_gc() {
+                            println!("Triggering GC");
+                        }
                         m.gc(&mut locs)?;
                         let result = m.alloc((*n).into());
                         match result {
