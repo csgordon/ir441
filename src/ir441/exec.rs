@@ -451,7 +451,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     if (result.is_ok()) {
                         cycles.alloc();
                         set_var(&mut locs, v, VirtualVal::Data { val: result.unwrap() })
-                    } else if result.is_err_with(|e| match e { RuntimeError::GCRequired => true, _ => false}){
+                    } else if result == Err(RuntimeError::GCRequired) {
                         // GC, then try again
                         if m.slot_cap.is_logging_gc() {
                             println!("Triggering GC");
