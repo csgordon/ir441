@@ -113,7 +113,7 @@ impl <'a> Memory<'a> {
         (mem,globs)
     }
 
-    fn gc(&mut self, locals: &mut Locals<'a>) -> Result<(),RuntimeError<'a>> {
+    fn gc(&mut self, stack: &mut Vec<Locals<'a>>) -> Result<(),RuntimeError<'a>> {
         if !self.slot_cap.is_gc() {
             panic!("Error: GC triggered in a mode where GC header is not allocated!");
         } else if self.slot_cap.is_logging_gc() {
@@ -129,26 +129,28 @@ impl <'a> Memory<'a> {
         self.allocations.clear();
         self.allocations = HashSet::new();
         self.slots_alloced = 0;
-        for (x,v) in locals.iter_mut() {
-            if self.slot_cap.is_logging_gc() {
-                println!("Tracing from root: {}={}", x, v);
-            }
-            match v {
-                VirtualVal::CodePtr {val} => (),
-                VirtualVal::Data {val} => {
-                    if old_allocations.contains(val) {
-                        let newloc = self.trace(*val)?;
-                        if self.slot_cap.is_logging_gc() {
-                            println!("Moved {} from {} to {}", x, val, newloc);
+        for locals in stack.iter_mut() {
+            for (x,v) in locals.iter_mut() {
+                if self.slot_cap.is_logging_gc() {
+                    println!("Tracing from root: {}={}", x, v);
+                }
+                match v {
+                    VirtualVal::CodePtr {val} => (),
+                    VirtualVal::Data {val} => {
+                        if old_allocations.contains(val) {
+                            let newloc = self.trace(*val)?;
+                            if self.slot_cap.is_logging_gc() {
+                                println!("Moved {} from {} to {}", x, val, newloc);
+                            }
+                            *v = VirtualVal::Data {val : newloc};
+                        } else {
+                            if self.slot_cap.is_logging_gc() {
+                                println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
+                            }
                         }
-                        *v = VirtualVal::Data {val : newloc};
-                    } else {
-                        if self.slot_cap.is_logging_gc() {
-                            println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
-                        }
-                    }
-                },
-                VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
+                    },
+                    VirtualVal::GCTombstone => panic!("Found GCTombstone in local variable slot: %{}", x)
+                }
             }
         }
         // After relocating, wipe everything from the old base to the start of the new "semispace" with tombstones for debugging
@@ -424,12 +426,13 @@ fn expr_val<'a>(l:&Locals<'a>, globs:&Globals<'a>, prog:&IRProgram<'a>, e:&IRExp
 // Run one basic block to completion. We abuse the Rust stack to encode the target code stack.
 fn run_code<'a>(prog: &'a IRProgram<'a>, 
                 mut cur_block: &'a BasicBlock<'a>, 
-                mut locs: Locals<'a>, 
+                locs: &mut Vec<Locals<'a>>,
                 globs: &mut Globals<'a>,
                 m: &mut Memory<'a>,
                 tracing: bool,
                 mut cycles: &mut ExecStats
             ) -> Result<VirtualVal<'a>,RuntimeError<'a>> {
+    let localsindex = locs.len() - 1;
     // on entry no previous block
     let mut prevblock : Option<&'a str> = None;
     let mut finalresult = None;
@@ -441,7 +444,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
             let _step =
             match i {
                 IRStatement::Print { out: e } => {
-                    let v = expr_val(&locs, &globs, &prog, &e)?;
+                    let v = expr_val(&locs[locs.len()-1], &globs, &prog, &e)?;
                     println!("{}",v);
                     cycles.print();
                     Ok(())
@@ -450,19 +453,19 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let result = m.alloc((*n).into());
                     if (result.is_ok()) {
                         cycles.alloc();
-                        set_var(&mut locs, v, VirtualVal::Data { val: result.unwrap() })
+                        set_var(&mut locs[localsindex], v, VirtualVal::Data { val: result.unwrap() })
                     } else if result == Err(RuntimeError::GCRequired) {
                         // GC, then try again
                         if m.slot_cap.is_logging_gc() {
                             println!("Triggering GC");
                         }
-                        m.gc(&mut locs)?;
+                        m.gc(locs)?;
                         let result = m.alloc((*n).into());
                         match result {
                             Err(RuntimeError::GCRequired) => Err(RuntimeError::OutOfMemory),
                             Err(_) => result.map(|_| ()),
                             Ok(result) => {
-                                set_var(&mut locs, v, VirtualVal::Data { val: result })?;
+                                set_var(&mut locs[localsindex], v, VirtualVal::Data { val: result })?;
                                 Ok(())
                             }
                         }
@@ -471,9 +474,9 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     }
                 },
                 IRStatement::VarAssign { lhs: var, rhs: e } => {
-                    let v = expr_val(&locs, &globs, &prog, &e)?;
+                    let v = expr_val(&locs[locs.len()-1], &globs, &prog, &e)?;
                     cycles.fast_op();
-                    set_var(&mut locs, var, v)
+                    set_var(&mut locs[localsindex], var, v)
                 },
                 IRStatement::Phi { lhs: dest, opts } => {
                     if prevblock.is_none() {
@@ -483,8 +486,8 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let mut done = false;
                     for (bname,src) in opts {
                         if pred.eq(*bname) {
-                            let v = expr_val(&locs, &globs, &prog, &src)?;
-                            set_var(&mut locs, &dest, v)?;
+                            let v = expr_val(&locs[locs.len()-1], &globs, &prog, &src)?;
+                            set_var(&mut locs[localsindex], &dest, v)?;
                             done = true;
                             break;
                         }
@@ -498,7 +501,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 },
                 IRStatement::Call { lhs: dest, code, receiver: rec, args } => {
                     let mut calleevars = HashMap::new();
-                    let vcode = expr_val(&locs, &globs, &prog, &code)?;
+                    let vcode = expr_val(&locs[locs.len()-1], &globs, &prog, &code)?;
                     let target_block_name = match vcode {
                         VirtualVal::CodePtr { val: b } => Ok(b),
                         VirtualVal::Data { .. } => Err(RuntimeError::CallingNonCode),
@@ -508,7 +511,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         Some(b) => Ok(b),
                         None => Err(RuntimeError::InvalidBlock { bname: target_block_name })
                     }?;
-                    let vrec = expr_val(&locs, &globs, &prog, &rec)?;
+                    let vrec = expr_val(&locs[locs.len()-1], &globs, &prog, &rec)?;
                     set_var(&mut calleevars, target_block.formals[0], vrec)?;
                     if args.len() + 1 != target_block.formals.len() {
                         return Err(RuntimeError::BadCallArity { instr: i });
@@ -516,18 +519,20 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     // args are in left-to-right order. Receiver is idx 0.
                     let mut argidx = 1;
                     for arg in args.iter() {
-                        let varg = expr_val(&locs, &globs, &prog, &arg)?;
+                        let varg = expr_val(&locs[locs.len()-1], &globs, &prog, &arg)?;
                         set_var(&mut calleevars, target_block.formals[argidx], varg)?;
                         argidx = argidx + 1;
                     }
                     cycles.call();
-                    let callresult = run_code(prog, target_block, calleevars, globs, m, tracing, &mut cycles)?;
-                    set_var(&mut locs, dest, callresult)
+                    locs.push(calleevars);
+                    let callresult = run_code(prog, target_block, locs, globs, m, tracing, &mut cycles)?;
+                    locs.pop();
+                    set_var(&mut locs[localsindex], dest, callresult)
                 },
                 IRStatement::SetElt { base, offset: off, val: v } => {
-                    let vbase = expr_val(&locs, &globs, &prog, &base)?;
-                    let offv = expr_val(&locs, &globs, &prog, &off)?;
-                    let v = expr_val(&locs, &globs, &prog, &v)?;
+                    let vbase = expr_val(&locs[locs.len()-1], &globs, &prog, &base)?;
+                    let offv = expr_val(&locs[locs.len()-1], &globs, &prog, &off)?;
+                    let v = expr_val(&locs[locs.len()-1], &globs, &prog, &v)?;
                     match vbase {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData),
@@ -546,8 +551,8 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     }
                 },
                 IRStatement::GetElt { lhs: dest, base: e, offset: off } => {
-                    let v = expr_val(&locs, &globs, &prog, &e)?;
-                    let offv = expr_val(&locs, &globs, &prog, &off)?;
+                    let v = expr_val(&locs[localsindex], &globs, &prog, &e)?;
+                    let offv = expr_val(&locs[localsindex], &globs, &prog, &off)?;
                     match v {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::GCTombstone => Err(RuntimeError::ReadFromGCedData),
@@ -561,26 +566,26 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                                     cycles.fast_op(); // addition
                                     cycles.read(); // memory access
                                     let mval = m.mem_lookup(n+(8*offset))?;
-                                    set_var(&mut locs, dest, mval)
+                                    set_var(&mut locs[localsindex], dest, mval)
                                 }
                             }
                     }
                 },
                 IRStatement::Load { lhs: dest, base: e } => {
-                    let v = expr_val(&locs, &globs, &prog, &e)?;
+                    let v = expr_val(&locs[locs.len()-1], &globs, &prog, &e)?;
                     match v {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::GCTombstone => Err(RuntimeError::ReadFromGCedData),
                         VirtualVal::Data { val: n } => {
                             cycles.read(); // memory access
                             let memval = m.mem_lookup(n)?;
-                            set_var(&mut locs, dest, memval)
+                            set_var(&mut locs[localsindex], dest, memval)
                         }
                     }
                 },
                 IRStatement::Store { base: e, val: ve } => {
-                    let bv = expr_val(&locs, &globs, &prog, &e)?;
-                    let vv = expr_val(&locs, &globs, &prog, &ve)?;
+                    let bv = expr_val(&locs[localsindex], &globs, &prog, &e)?;
+                    let vv = expr_val(&locs[localsindex], &globs, &prog, &ve)?;
                     match bv {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
                         VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData),
@@ -591,8 +596,8 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     }
                 },
                 IRStatement::Op { lhs: v, arg1: e1, op: o, arg2: e2} => {
-                    let v1 = expr_val(&locs, &globs, &prog, &e1)?;
-                    let v2 = expr_val(&locs, &globs, &prog, &e2)?;
+                    let v1 = expr_val(&locs[localsindex], &globs, &prog, &e1)?;
+                    let v2 = expr_val(&locs[localsindex], &globs, &prog, &e2)?;
                     match (v1,v2) {
                         (VirtualVal::CodePtr{ val: b },_) => Err(RuntimeError::CodeAddressArithmetic { bname: b}),
                         (_,VirtualVal::CodePtr{ val: b }) => Err(RuntimeError::CodeAddressArithmetic { bname: b}),
@@ -601,18 +606,18 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                         (VirtualVal::Data { val: n1 }, VirtualVal::Data { val: n2 }) => 
                             // We've ruled out computing with code addresses, which we don't plan to allow
                             match *o {
-                                "+"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1+n2 }) },
-                                "<<" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1<<n2 }) },
-                                ">>" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1>>n2 }) },
-                                "-"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1-n2 }) },
-                                "/"  => { cycles.slow_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1/n2 }) },
-                                "*"  => { cycles.slow_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1*n2 }) },
-                                "&"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1&n2 }) },
-                                "|"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1|n2 }) },
-                                "^"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: n1^n2 }) },
-                                "<"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1<n2 { 1 } else {0} }) },
-                                ">"  => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1>n2 {1} else {0} }) },
-                                "==" => { cycles.fast_op(); set_var(&mut locs, v, VirtualVal::Data { val: if n1==n2 {1} else {0}}) },
+                                "+"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1+n2 }) },
+                                "<<" => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1<<n2 }) },
+                                ">>" => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1>>n2 }) },
+                                "-"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1-n2 }) },
+                                "/"  => { cycles.slow_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1/n2 }) },
+                                "*"  => { cycles.slow_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1*n2 }) },
+                                "&"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1&n2 }) },
+                                "|"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1|n2 }) },
+                                "^"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: n1^n2 }) },
+                                "<"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: if n1<n2 { 1 } else {0} }) },
+                                ">"  => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: if n1>n2 {1} else {0} }) },
+                                "==" => { cycles.fast_op(); set_var(&mut locs[localsindex], v, VirtualVal::Data { val: if n1==n2 {1} else {0}}) },
                                 _ => Err(RuntimeError::NYI) 
                             }
                         
@@ -626,7 +631,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
         match &cur_block.next {
             ControlXfer::Fail {reason: r} => { panic!("Failure: {:?}", r )},
             ControlXfer::Ret { val: e } => {
-                let result = expr_val(&locs, &globs, &prog, &e)?;
+                let result = expr_val(&locs[locs.len()-1], &globs, &prog, &e)?;
                 cycles.ret();
                 finalresult = Some(result);
             },
@@ -640,7 +645,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 cur_block = target_block;
             },
             ControlXfer::If { cond, tblock, fblock } => {
-                let vcond = expr_val(&locs, &globs, &prog, &cond)?;
+                let vcond = expr_val(&locs[locs.len()-1], &globs, &prog, &cond)?;
                 // TODO: Reconsider if we really want global addresses to count as true instead of errors
                 let target_block_name = match vcond {
                     VirtualVal::Data { val: 0 } => fblock,
@@ -670,7 +675,9 @@ pub fn run_prog<'a>(prog: &'a IRProgram, tracing: bool, mut cycles: &mut ExecSta
         println!("Initial Globals:\n{:?}", globs);
     }
     // Run main with an empty variable
-    let fresult = run_code(prog, cur_block, HashMap::new(), &mut globs, &mut m, tracing, &mut cycles);
+    let mut stack = Vec::new();
+    stack.push(HashMap::new());
+    let fresult = run_code(prog, cur_block, &mut stack, &mut globs, &mut m, tracing, &mut cycles);
     match &fresult {
         Ok(v) => {
             println!("Final result: {:?}", v);
