@@ -1,7 +1,6 @@
 
 extern crate nom;
-use std::fmt;
-use std::collections::{HashMap,BTreeMap};
+use std::collections::{HashMap};
 
 use crate::ir441::nodes::*;
 use nom::{IResult,Finish};
@@ -76,34 +75,31 @@ pub fn parse_phi_arg_list(i: &[u8]) -> IResult<&[u8], Vec<(&str,IRExpr)>> {
     ))(i)
 }
 
-pub fn parse_full_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
-    tuple((multispace0,separated_list0(tuple((multispace0,tag(","),multispace0)),parse_ir_expr),multispace0,tag("}")))(i).map(|(rest,(_,v,_,_))| (rest,v) )
-}
 pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i,_) = multispace0(i)?;
     // This is a dumb hack, but we'll just hard-code for up to 10 comments...
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
-    let (i,r) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
+    let (i,_) = opt(tuple((tag("#"), (is_not("\n")) ,tag("\n") )))(i)?;
     let (i,_) = multispace0(i)?;
     alt((
         |i| tuple((tag("%"),parse_register_name,multispace1,tag("="),multispace1,tag("phi("),multispace0,parse_phi_arg_list))(i).map(|(rest,(_,l,_,_,_,_,_,a1))| (rest,IRStatement::Phi { lhs: l, opts: a1 })),
@@ -169,10 +165,6 @@ pub fn parse_basic_block(i: &[u8]) -> IResult<&[u8], BasicBlock> {
     tuple((
         identifier, parse_opt_block_arg_list, parse_ir_statements, parse_control
     ))(i).map(|(rest,(name,formals,prims,ctrl))| (rest,BasicBlock { name: name, instrs: prims, next: ctrl, formals: formals}))
-}
-
-pub fn parse_id_list(i: &[u8]) -> IResult<&[u8], Vec<&str>> {
-    separated_list0(tuple((multispace0,tag(","),multispace0)), identifier)(i)
 }
 
 pub fn parse_array_elt(i: &[u8]) -> IResult<&[u8], VirtualVal> {

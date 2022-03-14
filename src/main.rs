@@ -3,12 +3,10 @@
 extern crate nom;
 mod ir441;
 
-use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{self, BufReader};
 use std::path::Path;
-use std::collections::{HashMap,BTreeMap};
 
 use std::str::{from_utf8};
 use nom::{Finish};
@@ -98,7 +96,7 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     } else if cmd_str == "exec-gc-logging" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::GC {limit:100});
+        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::LoggingGC {limit:100});
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);

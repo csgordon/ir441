@@ -1,5 +1,5 @@
 use std::fmt;
-use std::collections::{HashMap,BTreeMap};
+use std::collections::{HashMap};
 
 // We will model an architecture where code and data live in separate address spaces
 // We don't need to have a global pointer because those actually get flattened into memory

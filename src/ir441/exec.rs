@@ -1,4 +1,3 @@
-use std::fmt;
 use std::collections::{HashMap,BTreeMap,HashSet};
 
 use crate::ir441::nodes::*;
@@ -55,7 +54,6 @@ pub enum RuntimeError<'a> {
     UnallocatedAddressRead { addr: u64 },
     UnallocatedAddressWrite { addr: u64 },
     UninitializedVariable { name: &'a str },
-    UndefinedVariable,
     UndefinedGlobal { name: &'a str },
     ReadFromGCedData,
     WriteToGCedData { addr: u64, val: VirtualVal<'a> },
@@ -135,7 +133,7 @@ impl <'a> Memory<'a> {
                     println!("Tracing from root: {}={}", x, v);
                 }
                 match v {
-                    VirtualVal::CodePtr {val} => (),
+                    VirtualVal::CodePtr {..} => (),
                     VirtualVal::Data {val} => {
                         if old_allocations.contains(val) {
                             let newloc = self.trace(*val)?;
@@ -221,7 +219,7 @@ impl <'a> Memory<'a> {
                             // trace
                             let moved_to = match orig {
                                             VirtualVal::GCTombstone => Err(RuntimeError::CorruptGCMetadata { val: orig }),
-                                            VirtualVal::CodePtr{val} => Err(RuntimeError::BadGCField),
+                                            VirtualVal::CodePtr{..} => Err(RuntimeError::BadGCField),
                                             VirtualVal::Data{val:to_trace} => self.trace(to_trace)
                                           }?;
                             self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
@@ -454,7 +452,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                 },
                 IRStatement::Alloc { lhs: v, slots: n } => {
                     let result = m.alloc((*n).into());
-                    if (result.is_ok()) {
+                    if result.is_ok() {
                         cycles.alloc();
                         set_var(&mut locs[localsindex], v, VirtualVal::Data { val: result.unwrap() })
                     } else if result == Err(RuntimeError::GCRequired) {
