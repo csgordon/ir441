@@ -58,7 +58,7 @@ pub enum RuntimeError<'a> {
     UndefinedVariable,
     UndefinedGlobal { name: &'a str },
     ReadFromGCedData,
-    WriteToGCedData,
+    WriteToGCedData { addr: u64, val: VirtualVal<'a> },
     WriteToImmutableData,
     NYI,
 }
@@ -301,7 +301,7 @@ impl <'a> Memory<'a> {
         } else if addr < self.first_writable {
             Err(RuntimeError::WriteToImmutableData)
         } else if addr < self.base {
-            Err(RuntimeError::WriteToGCedData)
+            Err(RuntimeError::WriteToGCedData { addr, val })
         } else if addr % 8 == 0 {
             match self.map.get(&addr) {
                 None => Err(RuntimeError::UnallocatedAddressWrite { addr }),
@@ -399,6 +399,9 @@ impl ExecStats {
     }
     fn phi(&mut self) {
         self.phis = self.phis + 1
+    }
+    pub fn new() -> ExecStats {
+        ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 }
     }
 }
 
@@ -535,7 +538,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let v = expr_val(&locs[locs.len()-1], &globs, &prog, &v)?;
                     match vbase {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
-                        VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData),
+                        VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData { addr: 0, val: v }),
                         VirtualVal::Data { val: n } => 
                             match offv {
                                 // TODO: should be different error
@@ -588,7 +591,7 @@ fn run_code<'a>(prog: &'a IRProgram<'a>,
                     let vv = expr_val(&locs[localsindex], &globs, &prog, &ve)?;
                     match bv {
                         VirtualVal::CodePtr { val: b } => Err(RuntimeError::AccessingCodeInMemory { bname: b }),
-                        VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData),
+                        VirtualVal::GCTombstone => Err(RuntimeError::WriteToGCedData { addr: 0, val: vv }),
                         VirtualVal::Data { val: n } => {
                             cycles.write(); // memory access
                             m.mem_store(n, vv).map(|_| ())

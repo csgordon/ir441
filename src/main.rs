@@ -78,7 +78,7 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     let (_leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
     let cmd_str = cmd.as_str();
 
-    let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+    let mut cycles = ExecStats::new();
 
     if cmd_str == "check" {
         println!("Parsed: {}", prog);
@@ -147,7 +147,7 @@ mod systests {
     fn check_trivial() -> Result<(),Box<dyn std::error::Error>>{
         let bytes = load_program("examples/trivial.ir")?;
         let prog = parse(&bytes)?;
-        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let mut cycles = ExecStats::new();
         let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
         assert_eq!(result,Ok(VirtualVal::Data { val: 23 }));
         Ok(())
@@ -186,6 +186,15 @@ mod systests {
         let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
         let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
         assert_eq!(result,Ok(VirtualVal::Data { val: 0 }));
+        Ok(())
+    }
+    #[test]
+    fn check_gctest3() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/gctest3.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        assert_eq!(result,Ok(VirtualVal::Data { val: 4096 }));
         Ok(())
     }
 }
