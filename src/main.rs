@@ -1,4 +1,3 @@
-#![feature(is_some_with)]
 // We'll just hack it all together in one file for now
 extern crate nom;
 mod ir441;
