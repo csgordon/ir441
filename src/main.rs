@@ -11,7 +11,7 @@ use std::path::Path;
 use std::collections::{HashMap,BTreeMap};
 
 use std::str::{from_utf8};
-use nom::{IResult,Finish};
+use nom::{Finish};
 
 use crate::ir441::nodes::*;
 use crate::ir441::parsing::*;
@@ -114,4 +114,78 @@ fn main() -> Result<(),Box<dyn std::error::Error>> {
     }
     
     Ok(())
+}
+
+#[cfg(test)]
+mod systests {
+    use std::path::Path;
+    use std::fs::File;
+    use std::io::{BufReader,BufRead};
+    use crate::ir441::nodes::*;
+    use crate::ir441::parsing::*;
+    use crate::ir441::exec::*;
+    use std::str::{from_utf8};
+    use nom::{Finish};
+
+    fn load_program(filepath: &str) -> Result<Vec<u8>,Box<dyn std::error::Error>> {
+        let libfile = Path::new(&filepath);
+        let display = libfile.display();
+        let mut reader: Box<dyn BufRead> = 
+        match File::open(&filepath) {
+            Err(why) => panic!("Couldn't open {}: {}", display, why),
+            Ok(file) => Box::new(BufReader::new(file)),
+        };
+        let mut bytes : Vec<u8> = vec![];
+        reader.read_to_end(&mut bytes)?; 
+        Ok(bytes)
+    }
+    fn parse(bytes:&Vec<u8>) -> Result<IRProgram,Box<dyn std::error::Error>> {
+        let (_leftover,prog) = parse_program(&bytes[..]).finish().map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
+        Ok(prog)
+    }
+    #[test]
+    fn check_trivial() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/trivial.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        assert_eq!(result,Ok(VirtualVal::Data { val: 23 }));
+        Ok(())
+    }
+    #[test]
+    fn check_countdown() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/countdown.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        assert_eq!(result,Ok(VirtualVal::Data { val: 0 }));
+        Ok(())
+    }
+    #[test]
+    fn check_basicoo() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/basicoo.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        assert_eq!(result,Ok(VirtualVal::Data { val: 3 }));
+        Ok(())
+    }
+    #[test]
+    fn check_gctest1() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/gctest1.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        assert_eq!(result,Ok(VirtualVal::Data { val: 0 }));
+        Ok(())
+    }
+    #[test]
+    fn check_gctest2() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/gctest2.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        assert_eq!(result,Ok(VirtualVal::Data { val: 0 }));
+        Ok(())
+    }
 }

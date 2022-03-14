@@ -53,7 +53,7 @@ l1:
 callAndPrint:
   %10 = call(%9, %x0)
   print(%10)
-  ret 0
+  ret %10
 badptr2:
   fail NotAPointer
 badfield2:
