@@ -164,11 +164,9 @@ impl <'a> Memory<'a> {
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
-        /*
         if self.slots_alloced + slots_including_metadata > self.slot_cap.effective_cap() {
             return Err(RuntimeError::OutOfMemory)
         }
-        */
         let metadata_base = self.next_alloc;
         for i in 0..slots_including_metadata {
             self.map.insert(metadata_base+i*8, VirtualVal::Data{val:0});
@@ -248,7 +246,6 @@ impl <'a> Memory<'a> {
 
     }
     fn alloc(&mut self, n:u64) -> Result<u64,RuntimeError<'a>> {
-        /*
         if self.slot_cap != ExecMode::Unlimited && self.slots_alloced + n + 1 > self.slot_cap.effective_cap() {
             match self.slot_cap {
                 ExecMode::Unlimited => {return Ok(0)}, // unreachable since we checked it's not unlimited
@@ -261,7 +258,6 @@ impl <'a> Memory<'a> {
                 println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
             }
         }
-        */
 
         // Skip 8 bytes to catch some memory errors
         self.next_alloc = self.next_alloc + 8;
