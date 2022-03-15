@@ -141,6 +141,7 @@ impl <'a> Memory<'a> {
                                 println!("Moved {} from {} to {}", x, val, newloc);
                             }
                             *v = VirtualVal::Data {val : newloc};
+                            self.allocations.insert(newloc);
                         } else {
                             if self.slot_cap.is_logging_gc() {
                                 println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
