@@ -164,9 +164,11 @@ impl <'a> Memory<'a> {
         Ok(())
     }
     fn reserve(&mut self, slots_including_metadata: u64) -> Result<u64,RuntimeError<'a>> {
+        /*
         if self.slots_alloced + slots_including_metadata > self.slot_cap.effective_cap() {
             return Err(RuntimeError::OutOfMemory)
         }
+        */
         let metadata_base = self.next_alloc;
         for i in 0..slots_including_metadata {
             self.map.insert(metadata_base+i*8, VirtualVal::Data{val:0});
@@ -217,14 +219,20 @@ impl <'a> Memory<'a> {
                         let orig = self.mem_lookup(addr + i*8)?;
                         if slotmap & 0x1 == 1 {
                             // trace
-                            let moved_to = match orig {
+                            let to_trace = match orig {
                                             VirtualVal::GCTombstone => Err(RuntimeError::CorruptGCMetadata { val: orig }),
                                             VirtualVal::CodePtr{..} => Err(RuntimeError::BadGCField),
-                                            VirtualVal::Data{val:to_trace} => self.trace(to_trace)
+                                            VirtualVal::Data{val:trace_val} => Ok(trace_val)
                                           }?;
-                            self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
-                            if self.slot_cap.is_logging_gc() {
-                                println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                            if to_trace != 0 {
+                                let moved_to = match self.trace(to_trace) {
+                                    Ok(moved_val) => moved_val,
+                                    Err(e) => return Err(e)
+                                };
+                                self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
+                                if self.slot_cap.is_logging_gc() {
+                                    println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                                }
                             }
                         } else {
                             // blind copy
@@ -240,6 +248,7 @@ impl <'a> Memory<'a> {
 
     }
     fn alloc(&mut self, n:u64) -> Result<u64,RuntimeError<'a>> {
+        /*
         if self.slot_cap != ExecMode::Unlimited && self.slots_alloced + n + 1 > self.slot_cap.effective_cap() {
             match self.slot_cap {
                 ExecMode::Unlimited => {return Ok(0)}, // unreachable since we checked it's not unlimited
@@ -252,6 +261,7 @@ impl <'a> Memory<'a> {
                 println!("Alloc'ing {} slots on top of {} with cap {}", n, self.slots_alloced, self.slot_cap.effective_cap());
             }
         }
+        */
 
         // Skip 8 bytes to catch some memory errors
         self.next_alloc = self.next_alloc + 8;
