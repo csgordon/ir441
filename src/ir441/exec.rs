@@ -141,6 +141,7 @@ impl <'a> Memory<'a> {
                                 println!("Moved {} from {} to {}", x, val, newloc);
                             }
                             *v = VirtualVal::Data {val : newloc};
+                            self.allocations.insert(newloc);
                         } else {
                             if self.slot_cap.is_logging_gc() {
                                 println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
@@ -217,15 +218,19 @@ impl <'a> Memory<'a> {
                         let orig = self.mem_lookup(addr + i*8)?;
                         if slotmap & 0x1 == 1 {
                             // trace
-                            let moved_to = match orig {
+                            let to_trace = match orig {
                                             VirtualVal::GCTombstone => Err(RuntimeError::CorruptGCMetadata { val: orig }),
                                             VirtualVal::CodePtr{..} => Err(RuntimeError::BadGCField),
-                                            VirtualVal::Data{val:to_trace} => self.trace(to_trace)
+                                            VirtualVal::Data{val:trace_val} => Ok(trace_val)
                                           }?;
-                            self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
-                            if self.slot_cap.is_logging_gc() {
-                                println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                            if to_trace != 0 {
+                                let moved_to = self.trace(to_trace)?;
+                                self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
+                                if self.slot_cap.is_logging_gc() {
+                                    println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
+                                }
                             }
+                            // No else for the 0 case is necessary, as slots are initialized to 0
                         } else {
                             // blind copy
                             self.mem_store(new_obj_base + i*8, orig)?;

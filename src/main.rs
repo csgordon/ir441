@@ -194,4 +194,22 @@ mod systests {
         assert_eq!(result,Ok(VirtualVal::Data { val: 4096 }));
         Ok(())
     }
+    #[test]
+    fn check_gctest4() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/gctest4.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        assert_eq!(result,Ok(VirtualVal::Data { val: 4096 }));
+        Ok(())
+    }
+    #[test]
+    fn check_gctest5() -> Result<(),Box<dyn std::error::Error>>{
+        let bytes = load_program("examples/gctest5.ir")?;
+        let prog = parse(&bytes)?;
+        let mut cycles = ExecStats { allocs: 0, calls: 0, fast_alu_ops: 0, slow_alu_ops: 0, phis: 0, conditional_branches: 0, unconditional_branches: 0, mem_reads: 0, mem_writes: 0, prints: 0, rets: 0 };
+        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        assert_eq!(result,Ok(VirtualVal::Data { val: 4096 }));
+        Ok(())
+    }
 }
