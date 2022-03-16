@@ -224,15 +224,13 @@ impl <'a> Memory<'a> {
                                             VirtualVal::Data{val:trace_val} => Ok(trace_val)
                                           }?;
                             if to_trace != 0 {
-                                let moved_to = match self.trace(to_trace) {
-                                    Ok(moved_val) => moved_val,
-                                    Err(e) => return Err(e)
-                                };
+                                let moved_to = self.trace(to_trace)?;
                                 self.mem_store(new_obj_base + i*8, VirtualVal::Data { val: moved_to })?;
                                 if self.slot_cap.is_logging_gc() {
                                     println!("Rewrote slot {} from {} to {}", i, orig, moved_to);
                                 }
                             }
+                            // No else for the 0 case is necessary, as slots are initialized to 0
                         } else {
                             // blind copy
                             self.mem_store(new_obj_base + i*8, orig)?;
