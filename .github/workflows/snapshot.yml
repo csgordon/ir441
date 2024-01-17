@@ -4,9 +4,9 @@ name: Tests and release
 on:
   push:
     branches:
-      - "**"
-    tags-ignore:
-      - "ir441-*"
+      - "*"
+    tags:
+      - "*"
   pull_request:
 
 env:
