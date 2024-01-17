@@ -136,7 +136,7 @@ jobs:
           command: "build"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
-          args: "--locked --release"
+          args: "--release" #removed --locked, which caused some platforms to fail
           strip: true
       - name: Run tests
         uses: houseabsolute/actions-rust-cross@v0
@@ -144,7 +144,7 @@ jobs:
           command: "test"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
-          args: "--locked --release"
+          args: "--release" # removed --locked, which caused some platforms to fail
         if: ${{ !matrix.platform.skip_tests }}
       - name: Package as archive
         shell: bash
