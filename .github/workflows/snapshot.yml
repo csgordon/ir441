@@ -27,6 +27,7 @@ jobs:
           # - sparc64-unknown-linux-gnu - cannot compile openssl-sys
           # - x86_64-unknown-illumos - weird error compiling openssl - "bin/sh: 1: granlib: not found"
           # - x86_64-unknown-netbsd - ld error with -lexecinfo /usr/local/lib/gcc/x86_64-unknown-netbsd/9.4.0/../../../../x86_64-unknown-netbsd/bin/ld: cannot find -lexecinfo
+          # - x86_64-unknown-openbsd - Rust can't find the target info, it's Tier 3
 
           - os_name: FreeBSD-x86_64
             os: ubuntu-20.04
@@ -83,12 +84,6 @@ jobs:
             target: s390x-unknown-linux-gnu
             bin: ir441
             name: ir441-Linux-s390x-gnu.tar.gz
-            skip_tests: true
-          - os_name: OpenBSD-x86_64
-            os: ubuntu-20.04
-            target: x86_64-unknown-openbsd
-            bin: ir441
-            name: ir441-OpenBSD-x86_64.tar.gz
             skip_tests: true
           - os_name: Windows-aarch64
             os: windows-latest
