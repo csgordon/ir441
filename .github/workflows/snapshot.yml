@@ -86,7 +86,7 @@ jobs:
             skip_tests: true
           - os_name: OpenBSD-x86_64
             os: ubuntu-20.04
-            target: x86_64-unknown-open
+            target: x86_64-unknown-openbsd
             bin: ir441
             name: ir441-OpenBSD-x86_64.tar.gz
             skip_tests: true
