@@ -77,3 +77,4 @@ jobs:
           executable-name: ir441
           target: ${{ matrix.platform.target }}
           changes-file: null # no release notes
+          release-tag-prefix: "" # just push a release for every commit that works
