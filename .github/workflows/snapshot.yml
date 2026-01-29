@@ -85,6 +85,7 @@ jobs:
           command: "test"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
+          changes-file: "" # no release notes
           args:
             "--release"
         if: ${{ !matrix.platform.skip-tests }}
