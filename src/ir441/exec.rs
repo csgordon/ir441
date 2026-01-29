@@ -176,7 +176,10 @@ impl<'a> Memory<'a> {
                             self.allocations.insert(newloc);
                         } else {
                             if self.slot_cap.is_logging_gc() {
-                                println!("Skipping {}={} b/c it does not appear to be a valid allocation", x, val);
+                                println!(
+                                    "Skipping {}={} b/c it does not appear to be a valid allocation",
+                                    x, val
+                                );
                             }
                         }
                     }
@@ -869,6 +872,16 @@ fn run_code<'a>(
                                         v,
                                         VirtualVal::Data {
                                             val: if n1 == n2 { 1 } else { 0 },
+                                        },
+                                    )
+                                }
+                                "!=" => {
+                                    cycles.fast_op();
+                                    set_var(
+                                        &mut locs[localsindex],
+                                        v,
+                                        VirtualVal::Data {
+                                            val: if n1 != n2 { 1 } else { 0 },
                                         },
                                     )
                                 }
