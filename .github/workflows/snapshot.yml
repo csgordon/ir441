@@ -1,12 +1,11 @@
-# Cross-platform binary releases based on https://github.com/houseabsolute/precious/blob/master/.github/workflows/ci.yml
 name: Tests and release
-
+# Using https://github.com/marketplace/actions/build-rust-projects-with-cross
 on:
   push:
     branches:
-      - "*"
-    tags:
-      - "*"
+      - "**"
+    tags-ignore:
+      - "ir441--*"
   pull_request:
 
 env:
@@ -15,164 +14,98 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: ${{ matrix.platform.os_name }} with rust ${{ matrix.toolchain }}
-    runs-on: ${{ matrix.platform.os }}
+  test-matrix:
+    name: ${{ matrix.platform.os-name }} with rust ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.platform.runs-on }}
     strategy:
       fail-fast: false
       matrix:
         platform:
-          # Platforms that don't work:
-          #
-          # - sparc64-unknown-linux-gnu - cannot compile openssl-sys
-          # - x86_64-unknown-illumos - weird error compiling openssl - "bin/sh: 1: granlib: not found"
-          # - x86_64-unknown-netbsd - ld error with -lexecinfo /usr/local/lib/gcc/x86_64-unknown-netbsd/9.4.0/../../../../x86_64-unknown-netbsd/bin/ld: cannot find -lexecinfo
-          # - x86_64-unknown-openbsd - Rust can't find the target info, it's Tier 3
-
-          - os_name: FreeBSD-x86_64
-            os: ubuntu-20.04
+          - os-name: FreeBSD-x86_64
+            runs-on: ubuntu-24.04
             target: x86_64-unknown-freebsd
-            bin: ir441
-            name: ir441-FreeBSD-x86_64.tar.gz
-            skip_tests: true
-          - os_name: Linux-x86_64
-            os: ubuntu-20.04
-            target: x86_64-unknown-linux-musl
-            bin: ir441
-            name: ir441-Linux-x86_64-musl.tar.gz
-          - os_name: Linux-aarch64
-            os: ubuntu-20.04
-            target: aarch64-unknown-linux-musl
-            bin: ir441
-            name: ir441-Linux-aarch64-musl.tar.gz
-          - os_name: Linux-arm
-            os: ubuntu-20.04
-            target: arm-unknown-linux-musleabi
-            bin: ir441
-            name: ir441-Linux-arm-musl.tar.gz
-          - os_name: Linux-i686
-            os: ubuntu-20.04
-            target: i686-unknown-linux-musl
-            bin: ir441
-            name: ir441-Linux-i686-musl.tar.gz
-            skip_tests: true
-          - os_name: Linux-powerpc
-            os: ubuntu-20.04
-            target: powerpc-unknown-linux-gnu
-            bin: ir441
-            name: ir441-Linux-powerpc-gnu.tar.gz
-            skip_tests: true
-          - os_name: Linux-powerpc64
-            os: ubuntu-20.04
-            target: powerpc64-unknown-linux-gnu
-            bin: ir441
-            name: ir441-Linux-powerpc64-gnu.tar.gz
-            skip_tests: true
-          - os_name: Linux-powerpc64le
-            os: ubuntu-20.04
-            target: powerpc64le-unknown-linux-gnu
-            bin: ir441
-            name: ir441-Linux-powerpc64le.tar.gz
-            skip_tests: true
-          - os_name: Linux-riscv64
-            os: ubuntu-20.04
+            skip-tests: true
+          - os-name: Linux-x86_64 (native-tls)
+            runs-on: ubuntu-24.04
+            # We need to use gnu or we cannot link against openssl.
+            target: x86_64-unknown-linux-gnu
+            features: native-tls
+          - os-name: Linux-riscv64
+            runs-on: ubuntu-24.04
             target: riscv64gc-unknown-linux-gnu
-            bin: ir441
-            name: ir441-Linux-riscv64gc-gnu.tar.gz
-          - os_name: Linux-s390x
-            os: ubuntu-20.04
-            target: s390x-unknown-linux-gnu
-            bin: ir441
-            name: ir441-Linux-s390x-gnu.tar.gz
-            skip_tests: true
-          - os_name: Windows-aarch64
-            os: windows-latest
+          - os-name: NetBSD-x86_64
+            runs-on: ubuntu-24.04
+            target: x86_64-unknown-netbsd
+            skip-tests: true
+          - os-name: Windows-aarch64
+            runs-on: windows-latest
             target: aarch64-pc-windows-msvc
-            bin: ir441.exe
-            name: ir441-Windows-aarch64.zip
-            skip_tests: true
-          - os_name: Windows-i686
-            os: windows-latest
+            skip-tests: true
+          - os-name: Windows-i686
+            runs-on: windows-latest
             target: i686-pc-windows-msvc
-            bin: ir441.exe
-            name: ir441-Windows-i686.zip
-            skip_tests: true
-          - os_name: Windows-x86_64
-            os: windows-latest
+            skip-tests: true
+          - os-name: Windows-x86_64
+            runs-on: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: ir441.exe
-            name: ir441-Windows-x86_64.zip
-          - os_name: macOS-x86_64
-            os: macOS-latest
+          - os-name: macOS-x86_64
+            runs-on: macOS-latest
             target: x86_64-apple-darwin
-            bin: ir441
-            name: ir441-Darwin-x86_64.tar.gz
-          - os_name: macOS-aarch64
-            os: macOS-latest
+          - os-name: macOS-aarch64
+            runs-on: macOS-latest
             target: aarch64-apple-darwin
-            bin: ir441
-            name: ir441-Darwin-aarch64.tar.gz
-            skip_tests: true
         toolchain:
           - stable
+        include:
+          - platform:
+              os-name: Linux-x86_64
+              runs-on: ubuntu-24.04
+              target: x86_64-unknown-linux-musl
+              bin: ir441
+            toolchain: beta
+          - platform:
+              os-name: Linux-x86_64
+              runs-on: ubuntu-24.04
+              target: x86_64-unknown-linux-musl
+              bin: ir441
+            toolchain: nightly
     steps:
-      - uses: actions/checkout@v3
-      - name: Cache cargo & target directories
-        uses: Swatinem/rust-cache@v2
-      - name: Configure Git
+      - uses: actions/checkout@v4
+      - name: Set "--features" flag value
+        id: set-features-flag-value
+        shell: bash
         run: |
-          git config --global user.email "jdoe@example.com"
-          git config --global user.name "J. Doe"
-      - name: Install musl-tools on Linux
-        run: sudo apt-get update --yes && sudo apt-get install --yes musl-tools
-        if: contains(matrix.platform.name, 'musl')
+          if [ -n "${{ matrix.platform.features }}" ]; then
+              echo "features=${{ matrix.platform.features }}" >> "$GITHUB_OUTPUT"
+          else 
+              echo "features=default" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+      - name: Maybe install SSL packages
+        run: sudo apt-get update --yes && sudo apt-get install --yes pkg-config openssl libssl-dev
+        if: matrix.platform.features == 'native-tls'
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: "build"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
-          args: "--release" #removed --locked, which caused some platforms to fail
+          args:
+            "--locked --release --features ${{ steps.set-features-flag-value.outputs.features }}"
           strip: true
       - name: Run tests
-        uses: houseabsolute/actions-rust-cross@v0
+        uses: houseabsolute/actions-rust-cross@v1
         with:
           command: "test"
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
-          args: "--release" # removed --locked, which caused some platforms to fail
-        if: ${{ !matrix.platform.skip_tests }}
-      - name: Package as archive
-        shell: bash
-        run: |
-          cd target/${{ matrix.platform.target }}/release
-          if [[ "${{ matrix.platform.os }}" == "windows-latest" ]]; then
-            7z a ../../../${{ matrix.platform.name }} ${{ matrix.platform.bin }}
-          else
-            tar czvf ../../../${{ matrix.platform.name }} ${{ matrix.platform.bin }}
-          fi
-          cd -
-        if: |
-          matrix.toolchain == 'stable' &&
-          ( startsWith( github.ref, 'refs/tags/v' ) ||
-            github.ref == 'refs/tags/test-release' )
-      - name: Publish release artifacts
-        uses: actions/upload-artifact@v4
+          args:
+            "--locked --release  --features ${{ steps.set-features-flag-value.outputs.features }}"
+        if: ${{ !matrix.platform.skip-tests }}
+      - name: Publish artifacts and release
+        uses: houseabsolute/actions-rust-release@v0
         with:
-          name: ir441-${{ matrix.platform.os_name }}
-          path: "ir441-*"
-        if: matrix.toolchain == 'stable' && github.ref == 'refs/tags/test-release'
-      - name: Generate SHA-256
-        run: shasum -a 256 ${{ matrix.platform.name }}
-        if: |
-          matrix.toolchain == 'stable' &&
-          matrix.platform.os == 'macOS-latest' &&
-          ( startsWith( github.ref, 'refs/tags/v' ) ||
-            github.ref == 'refs/tags/test-release' )
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v1
-        with:
-          draft: true
-          files: "ir441-*"
-          #body_path: Changes.md
-        if: matrix.toolchain == 'stable' && startsWith( github.ref, 'refs/tags/v' )
+          executable-name: ir441
+          target: ${{ matrix.platform.target }}
+          action-gh-release-parameters: '{ "make_latest": false }'
+        if: matrix.toolchain == 'stable' && matrix.platform.features == ''
