@@ -159,9 +159,15 @@ impl<'a> fmt::Display for IRStatement<'a> {
                 write!(f, ")")
             }
             IRStatement::Phi { lhs, opts } => {
-                write!(f, "%{} = call(", lhs)?;
+                let mut skip_comma = true;
+                write!(f, "%{} = phi(", lhs)?;
                 for (bname, src) in opts {
-                    write!(f, ", {}, ", bname)?;
+                    if skip_comma {
+                        write!(f, "{}, ", bname)?;
+                        skip_comma = false;
+                    } else {
+                        write!(f, ", {}, ", bname)?;
+                    }
                     src.fmt(f)?;
                 }
                 write!(f, ")")

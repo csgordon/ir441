@@ -526,16 +526,18 @@ fn expr_val<'a>(
     }
 }
 
-// Run one basic block to completion. We abuse the Rust stack to encode the target code stack, so don't be on tail call optimization in interpreted code.
+// Run one basic block's function to completion. We abuse the Rust stack to encode the target code stack, so don't be on tail call optimization in interpreted code.
 fn run_code<'a>(
     prog: &'a IRProgram<'a>,
-    mut cur_block: &'a BasicBlock<'a>,
+    entry_block: &'a BasicBlock<'a>,
     locs: &mut Vec<Locals<'a>>,
     globs: &mut Globals<'a>,
     m: &mut Memory<'a>,
     tracing: bool,
+    memdump: bool,
     mut cycles: &mut ExecStats,
 ) -> Result<VirtualVal<'a>, RuntimeError<'a>> {
+    let mut cur_block = entry_block;
     let localsindex = locs.len() - 1;
     // on entry no previous block
     let mut prevblock: Option<&'a str> = None;
@@ -659,9 +661,23 @@ fn run_code<'a>(
                     }
                     cycles.call();
                     locs.push(calleevars);
-                    let callresult =
-                        run_code(prog, target_block, locs, globs, m, tracing, &mut cycles)?;
+                    let callresult = run_code(
+                        prog,
+                        target_block,
+                        locs,
+                        globs,
+                        m,
+                        tracing,
+                        memdump,
+                        &mut cycles,
+                    )?;
                     locs.pop();
+                    if tracing {
+                        println!(
+                            "Call to {:?} returned {:?}, storing into %{:?}",
+                            target_block.name, callresult, dest
+                        );
+                    }
                     set_var(&mut locs[localsindex], dest, callresult)
                 }
                 IRStatement::SetElt {
@@ -948,11 +964,16 @@ fn run_code<'a>(
             }
         }
     }
+    if memdump {
+        println!("Dumping memory on exit from {:?}\n", entry_block.name);
+        m.print(prog, &globs);
+    }
     Ok(finalresult.unwrap())
 }
 pub fn run_prog<'a>(
     prog: &'a IRProgram,
     tracing: bool,
+    memdump: bool,
     mut cycles: &mut ExecStats,
     cap: ExecMode,
 ) -> Result<VirtualVal<'a>, RuntimeError<'a>> {
@@ -975,6 +996,7 @@ pub fn run_prog<'a>(
         &mut globs,
         &mut m,
         tracing,
+        memdump,
         &mut cycles,
     );
     match &fresult {

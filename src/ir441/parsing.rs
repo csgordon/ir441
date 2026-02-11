@@ -5,22 +5,20 @@ use crate::ir441::nodes::*;
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag};
 use nom::character::complete::{alpha1, alphanumeric1, digit1, multispace0, multispace1};
-use nom::combinator::{all_consuming, opt, recognize};
-use nom::multi::{many0, separated_list0, separated_list1};
+use nom::combinator::{all_consuming, cut, eof, opt, recognize};
+use nom::error::{VerboseError, context, convert_error};
+use nom::multi::{many0, many1, separated_list0, separated_list1};
 use nom::sequence::{pair, tuple};
 use nom::{Finish, IResult};
 
-use std::str::from_utf8;
-
 // Adapted from nom recipes
-pub fn identifier(input: &[u8]) -> IResult<&[u8], &str> {
+pub fn identifier(input: &str) -> IResult<&str, &str, VerboseError<&str>> {
     recognize(pair(
         alt((alpha1, tag("_"))),
         many0(alt((alphanumeric1, tag("_")))),
     ))(input)
-    .map(|(rest, m)| (rest, from_utf8(m).unwrap()))
 }
-pub fn parse_op(i: &[u8]) -> IResult<&[u8], &str> {
+pub fn parse_op(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     alt((
         tag("<<"),
         tag(">>"),
@@ -36,12 +34,11 @@ pub fn parse_op(i: &[u8]) -> IResult<&[u8], &str> {
         tag("=="),
         tag("!="),
     ))(i)
-    .map(|(rest, op)| (rest, from_utf8(op).unwrap()))
 }
-pub fn parse_register_name(i: &[u8]) -> IResult<&[u8], &str> {
-    alphanumeric1(i).map(|(rest, id)| (rest, from_utf8(id).unwrap()))
+pub fn parse_register_name(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
+    alphanumeric1(i) //.map(|(rest, id)| (rest, from_utf8(id).unwrap()))
 }
-pub fn parse_ir_expr(i: &[u8]) -> IResult<&[u8], IRExpr> {
+pub fn parse_ir_expr<'a>(i: &'a str) -> IResult<&'a str, IRExpr<'a>, VerboseError<&'a str>> {
     let (i, _) = multispace0(i)?;
     alt((
         |i| {
@@ -53,12 +50,12 @@ pub fn parse_ir_expr(i: &[u8]) -> IResult<&[u8], IRExpr> {
                 .map(|(rest, (_, id))| (rest, IRExpr::Var { id: id }))
         },
         |i| identifier(i).map(|(rest, id)| (rest, IRExpr::BlockRef { bname: id })),
-        |i| {
+        |i: &'a str| {
             digit1(i).map(|(rest, n)| {
                 (
                     rest,
                     IRExpr::IntLit {
-                        val: from_utf8(n).unwrap().parse::<u64>().unwrap(),
+                        val: n.parse::<u64>().unwrap(), //from_utf8(n).unwrap().parse::<u64>().unwrap(),
                     },
                 )
             })
@@ -66,7 +63,7 @@ pub fn parse_ir_expr(i: &[u8]) -> IResult<&[u8], IRExpr> {
     ))(i)
 }
 
-pub fn parse_reason(i: &[u8]) -> IResult<&[u8], Reason> {
+pub fn parse_reason(i: &str) -> IResult<&str, Reason, VerboseError<&str>> {
     let (i, _) = multispace0(i)?;
     alt((
         |i| tag("NotAPointer")(i).map(|(rest, _)| (rest, Reason::NotAPointer)),
@@ -75,7 +72,7 @@ pub fn parse_reason(i: &[u8]) -> IResult<&[u8], Reason> {
         |i| tag("NoSuchField")(i).map(|(rest, _)| (rest, Reason::NoSuchField)),
     ))(i)
 }
-pub fn parse_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
+pub fn parse_arg_list<'a>(i: &'a str) -> IResult<&'a str, Vec<IRExpr<'a>>, VerboseError<&'a str>> {
     alt((
         |i| {
             tuple((
@@ -91,7 +88,7 @@ pub fn parse_arg_list(i: &[u8]) -> IResult<&[u8], Vec<IRExpr>> {
     ))(i)
 }
 
-pub fn parse_phi_arg_list(i: &[u8]) -> IResult<&[u8], Vec<(&str, IRExpr)>> {
+pub fn parse_phi_arg_list(i: &str) -> IResult<&str, Vec<(&str, IRExpr)>, VerboseError<&str>> {
     alt((
         |i| {
             tuple((
@@ -112,7 +109,7 @@ pub fn parse_phi_arg_list(i: &[u8]) -> IResult<&[u8], Vec<(&str, IRExpr)>> {
     ))(i)
 }
 
-pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
+pub fn parse_ir_statement(i: &str) -> IResult<&str, IRStatement, VerboseError<&str>> {
     // TODO: Very sensitive to ordering. Should reject input that results in parsing a blockname phi or alloc
     let (i, _) = multispace0(i)?;
     // This is a dumb hack, but we'll just hard-code for up to 10 comments...
@@ -299,7 +296,7 @@ pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
                     rest,
                     IRStatement::Alloc {
                         lhs: l,
-                        slots: from_utf8(d).unwrap().parse::<u32>().unwrap(),
+                        slots: d.parse::<u32>().unwrap(),
                     },
                 )
             })
@@ -353,7 +350,7 @@ pub fn parse_ir_statement(i: &[u8]) -> IResult<&[u8], IRStatement> {
         },
     ))(i)
 }
-pub fn parse_ir_statements(i: &[u8]) -> IResult<&[u8], Vec<IRStatement>> {
+pub fn parse_ir_statements(i: &str) -> IResult<&str, Vec<IRStatement>, VerboseError<&str>> {
     // This needs to eat trailing whitespace as well, but tuple((multispace0,tag("\n"))) seems to stick the \n into the whitespace....
     separated_list0(
         tuple((opt(tag("\r")), tag("\n"))), //tuple((multispace0,tag("\n"))),
@@ -363,7 +360,7 @@ pub fn parse_ir_statements(i: &[u8]) -> IResult<&[u8], Vec<IRStatement>> {
     )(i)
 }
 
-pub fn parse_control(i: &[u8]) -> IResult<&[u8], ControlXfer> {
+pub fn parse_control(i: &str) -> IResult<&str, ControlXfer, VerboseError<&str>> {
     let (i, _) = multispace0(i)?;
     alt((
         |i| {
@@ -407,12 +404,12 @@ pub fn parse_control(i: &[u8]) -> IResult<&[u8], ControlXfer> {
 }
 
 // They're not really supposed to have leading %s, but I shipped some demo code that did it, so let's accept it.
-pub fn parse_block_arg(i: &[u8]) -> IResult<&[u8], &str> {
+pub fn parse_block_arg(i: &str) -> IResult<&str, &str, VerboseError<&str>> {
     alt((identifier, |x| {
         tuple((tag("%"), identifier))(x).map(|(rst, (_, id))| (rst, (id)))
     }))(i)
 }
-pub fn parse_opt_block_arg_list(i: &[u8]) -> IResult<&[u8], Vec<&str>> {
+pub fn parse_opt_block_arg_list(i: &str) -> IResult<&str, Vec<&str>, VerboseError<&str>> {
     alt((
         |x| tuple((tag(":"), opt(tag("\r")), tag("\n")))(x).map(|(rest, _)| (rest, vec![])),
         |x| {
@@ -429,43 +426,46 @@ pub fn parse_opt_block_arg_list(i: &[u8]) -> IResult<&[u8], Vec<&str>> {
         },
     ))(i)
 }
-pub fn parse_basic_block(i: &[u8]) -> IResult<&[u8], BasicBlock> {
+pub fn parse_basic_block(i: &str) -> IResult<&str, BasicBlock, VerboseError<&str>> {
     let (i, _) = multispace0(i)?;
-    tuple((
-        identifier,
+    let (aftername, name) = identifier(i)?;
+    let (afterformals, formals) = cut(context(
+        "Expecting block arguments or colon: ",
         parse_opt_block_arg_list,
-        parse_ir_statements,
+    ))(aftername)?;
+    let (afterprims, prims) = parse_ir_statements(afterformals)?;
+    let (rest, ctrl) = cut(context(
+        "Expecting basic block to end with control transfer",
         parse_control,
-    ))(i)
-    .map(|(rest, (name, formals, prims, ctrl))| {
-        (
-            rest,
-            BasicBlock {
-                name: name,
-                instrs: prims,
-                next: ctrl,
-                formals: formals,
-            },
-        )
-    })
+    ))(afterprims)?;
+    Ok((
+        rest,
+        BasicBlock {
+            name: name,
+            instrs: prims,
+            next: ctrl,
+            formals: formals,
+        },
+    ))
+    // })
 }
 
-pub fn parse_array_elt(i: &[u8]) -> IResult<&[u8], VirtualVal> {
+pub fn parse_array_elt<'a>(i: &'a str) -> IResult<&str, VirtualVal, VerboseError<&str>> {
     alt((
         |i| identifier(i).map(|(rest, x)| (rest, VirtualVal::CodePtr { val: x })),
-        |i| {
+        |i: &'a str| {
             digit1(i).map(|(rest, x)| {
                 (
                     rest,
                     VirtualVal::Data {
-                        val: from_utf8(x).unwrap().parse::<u64>().unwrap(),
+                        val: x.parse::<u64>().unwrap(),
                     },
                 )
             })
         },
     ))(i)
 }
-pub fn parse_array_body(i: &[u8]) -> IResult<&[u8], Vec<VirtualVal>> {
+pub fn parse_array_body(i: &str) -> IResult<&str, Vec<VirtualVal>, VerboseError<&str>> {
     tuple((
         multispace0,
         separated_list0(tuple((multispace0, tag(","), multispace0)), parse_array_elt),
@@ -474,7 +474,8 @@ pub fn parse_array_body(i: &[u8]) -> IResult<&[u8], Vec<VirtualVal>> {
     ))(i)
     .map(|(rest, (_, v, _, _))| (rest, v))
 }
-pub fn parse_global(i: &[u8]) -> IResult<&[u8], GlobalStatic> {
+pub fn parse_global(i: &str) -> IResult<&str, GlobalStatic, VerboseError<&str>> {
+    // TODO: rewrite using cut with context after the 'global' keyword for better parsing errors
     tuple((
         tuple((
             multispace0,
@@ -504,49 +505,40 @@ mod parsing_tests {
     use crate::ir441::parsing::*;
     #[test]
     fn check_ir_txpr() {
-        let empty: &[u8] = b"";
+        let empty = "";
+        assert_eq!(parse_ir_expr("%v3"), Ok((empty, IRExpr::Var { id: "v3" })));
+        assert_eq!(parse_ir_expr("%3"), Ok((empty, IRExpr::Var { id: "3" })));
         assert_eq!(
-            parse_ir_expr("%v3".as_bytes()),
-            Ok((empty, IRExpr::Var { id: "v3" }))
-        );
-        assert_eq!(
-            parse_ir_expr("%3".as_bytes()),
-            Ok((empty, IRExpr::Var { id: "3" }))
-        );
-        assert_eq!(
-            parse_ir_expr("%asdf".as_bytes()),
+            parse_ir_expr("%asdf"),
             Ok((empty, IRExpr::Var { id: "asdf" }))
         );
         assert_eq!(
-            parse_ir_expr("@v3".as_bytes()),
+            parse_ir_expr("@v3"),
             Ok((empty, IRExpr::GlobalRef { name: "v3" }))
         );
         assert_eq!(
-            parse_ir_expr("@asdf".as_bytes()),
+            parse_ir_expr("@asdf"),
             Ok((empty, IRExpr::GlobalRef { name: "asdf" }))
         );
         assert_eq!(
-            parse_ir_expr("v3".as_bytes()),
+            parse_ir_expr("v3"),
             Ok((empty, IRExpr::BlockRef { bname: "v3" }))
         );
         assert_eq!(
-            parse_ir_expr("asdf".as_bytes()),
+            parse_ir_expr("asdf"),
             Ok((empty, IRExpr::BlockRef { bname: "asdf" }))
         );
+        assert_eq!(parse_ir_expr("3"), Ok((empty, IRExpr::IntLit { val: 3 })));
         assert_eq!(
-            parse_ir_expr("3".as_bytes()),
-            Ok((empty, IRExpr::IntLit { val: 3 }))
-        );
-        assert_eq!(
-            parse_ir_expr("2342342".as_bytes()),
+            parse_ir_expr("2342342"),
             Ok((empty, IRExpr::IntLit { val: 2342342 }))
         );
         assert_eq!(
-            parse_ir_expr("23432241".as_bytes()),
+            parse_ir_expr("23432241"),
             Ok((empty, IRExpr::IntLit { val: 23432241 }))
         );
         assert_eq!(
-            parse_ir_expr("18446744073709551614".as_bytes()),
+            parse_ir_expr("18446744073709551614"),
             Ok((
                 empty,
                 IRExpr::IntLit {
@@ -558,28 +550,28 @@ mod parsing_tests {
 
     #[test]
     fn check_args() {
-        let empty: &[u8] = b"";
-        assert_eq!(parse_arg_list(")".as_bytes()), Ok((empty, vec![])));
+        let empty = "";
+        assert_eq!(parse_arg_list(")"), Ok((empty, vec![])));
         assert_eq!(
-            parse_arg_list(", 3)".as_bytes()),
+            parse_arg_list(", 3)"),
             Ok((empty, vec![IRExpr::IntLit { val: 3 }]))
         );
         assert_eq!(
-            parse_arg_list(", %v3, 3)".as_bytes()),
+            parse_arg_list(", %v3, 3)"),
             Ok((
                 empty,
                 vec![IRExpr::Var { id: "v3" }, IRExpr::IntLit { val: 3 }]
             ))
         );
         assert_eq!(
-            parse_arg_list(", %3, 3)".as_bytes()),
+            parse_arg_list(", %3, 3)"),
             Ok((
                 empty,
                 vec![IRExpr::Var { id: "3" }, IRExpr::IntLit { val: 3 }]
             ))
         );
         assert_eq!(
-            parse_arg_list(", %v3 , 3 )".as_bytes()).map(|(rest, r)| (from_utf8(rest).unwrap(), r)),
+            parse_arg_list(", %v3 , 3 )"), //.map(|(rest, r)| (from_utf8(rest).unwrap(), r)),
             Ok((
                 "",
                 vec![IRExpr::Var { id: "v3" }, IRExpr::IntLit { val: 3 }]
@@ -589,14 +581,14 @@ mod parsing_tests {
 
     #[test]
     fn check_phi_args() {
-        let empty: &[u8] = b"";
-        assert_eq!(parse_phi_arg_list(")".as_bytes()), Ok((empty, vec![])));
+        let empty = "";
+        assert_eq!(parse_phi_arg_list(")"), Ok((empty, vec![])));
         assert_eq!(
-            parse_phi_arg_list("blah, 3)".as_bytes()),
+            parse_phi_arg_list("blah, 3)"),
             Ok((empty, vec![("blah", IRExpr::IntLit { val: 3 })]))
         );
         assert_eq!(
-            parse_phi_arg_list("blah, 3, asdf, %v3)".as_bytes()),
+            parse_phi_arg_list("blah, 3, asdf, %v3)"),
             Ok((
                 empty,
                 vec![
@@ -606,11 +598,11 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_phi_arg_list("blah ,  3 )".as_bytes()),
+            parse_phi_arg_list("blah ,  3 )"),
             Ok((empty, vec![("blah", IRExpr::IntLit { val: 3 })]))
         );
         assert_eq!(
-            parse_phi_arg_list("blah ,  3  ,   asdf , %v3  )".as_bytes()),
+            parse_phi_arg_list("blah ,  3  ,   asdf , %v3  )"),
             Ok((
                 empty,
                 vec![
@@ -621,7 +613,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_phi_arg_list("bb1,%q,bb3,5)".as_bytes()),
+            parse_phi_arg_list("bb1,%q,bb3,5)"),
             Ok((
                 empty,
                 vec![
@@ -631,7 +623,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_phi_arg_list("bb1 , %q , bb3 , 5 )".as_bytes()),
+            parse_phi_arg_list("bb1 , %q , bb3 , 5 )"),
             Ok((
                 empty,
                 vec![
@@ -644,9 +636,9 @@ mod parsing_tests {
 
     #[test]
     fn check_statements() {
-        let empty: &[u8] = b"";
+        let empty = "";
         assert_eq!(
-            parse_ir_statement("print(3)".as_bytes()),
+            parse_ir_statement("print(3)"),
             Ok((
                 empty,
                 IRStatement::Print {
@@ -655,7 +647,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("print( 3 )".as_bytes()),
+            parse_ir_statement("print( 3 )"),
             Ok((
                 empty,
                 IRStatement::Print {
@@ -664,7 +656,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("print(\t3 )".as_bytes()),
+            parse_ir_statement("print(\t3 )"),
             Ok((
                 empty,
                 IRStatement::Print {
@@ -673,7 +665,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("\t\tprint( 3 )".as_bytes()),
+            parse_ir_statement("\t\tprint( 3 )"),
             Ok((
                 empty,
                 IRStatement::Print {
@@ -683,7 +675,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statement("%v = 3".as_bytes()),
+            parse_ir_statement("%v = 3"),
             Ok((
                 empty,
                 IRStatement::VarAssign {
@@ -693,7 +685,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("  %v  =   3".as_bytes()),
+            parse_ir_statement("  %v  =   3"),
             Ok((
                 empty,
                 IRStatement::VarAssign {
@@ -703,7 +695,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("%1 = 10".as_bytes()),
+            parse_ir_statement("%1 = 10"),
             Ok((
                 empty,
                 IRStatement::VarAssign {
@@ -714,7 +706,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statement("%1 = call(%code, %recv, %arg1, %arg2)".as_bytes()),
+            parse_ir_statement("%1 = call(%code, %recv, %arg1, %arg2)"),
             Ok((
                 empty,
                 IRStatement::Call {
@@ -727,7 +719,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statement("%1 = load(%4)".as_bytes()),
+            parse_ir_statement("%1 = load(%4)"),
             Ok((
                 empty,
                 IRStatement::Load {
@@ -737,7 +729,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("%3 = load(%2)".as_bytes()),
+            parse_ir_statement("%3 = load(%2)"),
             Ok((
                 empty,
                 IRStatement::Load {
@@ -747,7 +739,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("  %3  =  load( %2 )".as_bytes()),
+            parse_ir_statement("  %3  =  load( %2 )"),
             Ok((
                 empty,
                 IRStatement::Load {
@@ -758,7 +750,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statement("%v = phi(bb1,%q,bb3,5)".as_bytes()),
+            parse_ir_statement("%v = phi(bb1,%q,bb3,5)"),
             Ok((
                 empty,
                 IRStatement::Phi {
@@ -771,7 +763,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("  %v  =   phi( bb1 , %q , bb3 , 5 )".as_bytes()),
+            parse_ir_statement("  %v  =   phi( bb1 , %q , bb3 , 5 )"),
             Ok((
                 empty,
                 IRStatement::Phi {
@@ -785,7 +777,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statement("%v = 3 + 4".as_bytes()),
+            parse_ir_statement("%v = 3 + 4"),
             Ok((
                 empty,
                 IRStatement::Op {
@@ -797,7 +789,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_ir_statement("\t %v   =  %q   * 4".as_bytes()),
+            parse_ir_statement("\t %v   =  %q   * 4"),
             Ok((
                 empty,
                 IRStatement::Op {
@@ -810,7 +802,7 @@ mod parsing_tests {
         );
 
         assert_eq!(
-            parse_ir_statements("\t %v   =  %q   * 4\nprint( %v )".as_bytes()),
+            parse_ir_statements("\t %v   =  %q   * 4\nprint( %v )"),
             Ok((
                 empty,
                 vec![
@@ -834,17 +826,22 @@ mod parsing_tests {
 
     #[test]
     fn check_control() {
-        let empty: &[u8] = b"";
+        let empty = "";
         assert_eq!(
-            parse_control("\tjump loophead".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_control("\tjump loophead").finish(),
             Ok((empty, ControlXfer::Jump { block: "loophead" }))
         );
         assert_eq!(
-            parse_control("\tret 0".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_control("\tret 0").finish(),
+            Ok((
+                empty,
+                ControlXfer::Ret {
+                    val: IRExpr::IntLit { val: 0 }
+                }
+            ))
+        );
+        assert_eq!(
+            parse_control("  ret 0").finish(),
             Ok((
                 empty,
                 ControlXfer::Ret {
@@ -856,11 +853,9 @@ mod parsing_tests {
 
     #[test]
     fn check_basicblock() {
-        let empty: &[u8] = b"";
+        let empty = "";
         assert_eq!(
-            parse_basic_block("main:\n\t%1 = 10\nret 0".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_basic_block("main:\n\t%1 = 10\nret 0").finish(),
             Ok((
                 empty,
                 BasicBlock {
@@ -877,9 +872,38 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_basic_block("mB(this):\n\tret 0".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_basic_block("main:\n  %1 = 10\n  ret 0").finish(),
+            Ok((
+                empty,
+                BasicBlock {
+                    name: "main",
+                    formals: vec![],
+                    instrs: vec![IRStatement::VarAssign {
+                        lhs: "1",
+                        rhs: IRExpr::IntLit { val: 10 }
+                    }],
+                    next: ControlXfer::Ret {
+                        val: IRExpr::IntLit { val: 0 }
+                    }
+                }
+            ))
+        );
+        assert_eq!(
+            parse_basic_block("main:\n  ret 0").finish(),
+            Ok((
+                empty,
+                BasicBlock {
+                    name: "main",
+                    formals: vec![],
+                    instrs: vec![],
+                    next: ControlXfer::Ret {
+                        val: IRExpr::IntLit { val: 0 }
+                    }
+                }
+            ))
+        );
+        assert_eq!(
+            parse_basic_block("mB(this):\n\tret 0").finish(),
             Ok((
                 empty,
                 BasicBlock {
@@ -894,9 +918,7 @@ mod parsing_tests {
         );
         // Also, windows line endings
         assert_eq!(
-            parse_basic_block("main:\r\n\t%1 = 10\r\nret 0".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_basic_block("main:\r\n\t%1 = 10\r\nret 0").finish(),
             Ok((
                 empty,
                 BasicBlock {
@@ -913,9 +935,7 @@ mod parsing_tests {
             ))
         );
         assert_eq!(
-            parse_basic_block("mB(this):\r\n\tret 0".as_bytes())
-                .finish()
-                .map_err(|nom::error::Error { input: x, code: _ }| from_utf8(x).unwrap()),
+            parse_basic_block("mB(this):\r\n\tret 0").finish(),
             Ok((
                 empty,
                 BasicBlock {
@@ -932,9 +952,9 @@ mod parsing_tests {
 
     #[test]
     fn check_global() {
-        let empty: &[u8] = b"";
+        let empty = "";
         assert_eq!(
-            parse_global("global array vtblA: { mA }\n".as_bytes()),
+            parse_global("global array vtblA: { mA }\n"),
             Ok((
                 empty,
                 GlobalStatic::Array {
@@ -946,8 +966,18 @@ mod parsing_tests {
     }
 }
 
-pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
-    let (rst, _) = tuple((multispace0, tag("data:"), opt(tag("\r")), tag("\n")))(i)?;
+pub fn parse_program<'a>(
+    i: &'a str,
+) -> IResult<&'a str, IRProgram<'a>, nom::error::VerboseError<&'a str>> {
+    let (rst, _) = tuple((
+        multispace0,
+        cut(context(
+            "Program missing initial data: section",
+            tag("data:"),
+        )),
+        opt(tag("\r")),
+        tag("\n"),
+    ))(i)?;
     let mut globals = vec![];
     let mut last_global_parse = parse_global(rst);
     //print!("Initial global parse {:?}", last_global_parse);
@@ -958,57 +988,52 @@ pub fn parse_program(i: &[u8]) -> IResult<&[u8], IRProgram> {
         last_global_parse = parse_global(remaining);
     }
     match last_global_parse.finish() {
-        Err(nom::error::Error {
-            input: postglobals,
-            code: _,
-        }) => {
+        Err(nom::error::VerboseError { errors }) => {
+            let postglobals = errors[0].0;
             // TODO: figure out what happens with
-            let (rst2, _) =
-                tuple((multispace0, tag("code:"), opt(tag("\r")), tag("\n")))(postglobals)?;
-            let mut last_block_parse = parse_basic_block(rst2);
-            let mut blocks = vec![];
-            while let Ok((remaining2, b)) = last_block_parse {
-                //println!("Parsed basic block:\n{:?}", &b);
-                //println!("remaining text: {:?}", from_utf8(remaining2).unwrap());
-                blocks.push(b);
-                last_block_parse = parse_basic_block(remaining2);
-                //println!("last_block_parse={:?}", &last_block_parse);
-            }
-            //println!("last_block_parse={:?}", &last_block_parse);
-            match last_block_parse.finish() {
-                Err(nom::error::Error {
-                    input: postcode,
-                    code: _,
-                }) => {
-                    //println!("postcode={}", from_utf8(postcode).unwrap());
-                    let tail =
-                        all_consuming::<_, _, nom::error::Error<&[u8]>, _>(multispace0)(postcode)
-                            .finish();
-                    match tail {
-                        Ok(_) => {
-                            let mut bs = HashMap::new();
-                            while let Some(b) = blocks.pop() {
-                                bs.insert(b.name, b);
-                            }
-                            Ok((
-                                "".as_bytes(),
-                                IRProgram {
-                                    globals: globals,
-                                    blocks: bs,
-                                },
-                            ))
-                        }
-                        Err(nom::error::Error { input: x, code: _ }) => {
-                            panic!(
-                                "Leftover text after last parsed block: {}",
-                                from_utf8(x).unwrap()
-                            )
-                        }
+            let (rst2, _) = tuple((
+                multispace0,
+                cut(context(
+                    "Program missing 'code:' section header",
+                    tag("code:"),
+                )),
+                opt(tag("\r")),
+                tag("\n"),
+            ))(postglobals)?;
+            let blockparse: IResult<&'a str, Vec<BasicBlock<'a>>, VerboseError<&'a str>> =
+                cut(context(
+                    "Expecting at least one valid basic block",
+                    many1(parse_basic_block),
+                ))(rst2);
+            let (postcode, mut blocks) = blockparse?;
+            let tail = cut(context(
+                "Only blank spaces are permitted after the last valid block",
+                all_consuming::<_, _, nom::error::VerboseError<&str>, _>(multispace0),
+            ))(postcode)
+            .finish();
+
+            match tail {
+                Ok(_) => {
+                    let mut bs = HashMap::new();
+                    while let Some(b) = blocks.pop() {
+                        bs.insert(b.name, b);
                     }
+                    Ok((
+                        "",
+                        IRProgram {
+                            globals: globals,
+                            blocks: bs,
+                        },
+                    ))
                 }
-                _ => panic!("shouldn't hit this"),
+                Err(ve) => {
+                    eprintln!(
+                        "Leftover text after parsing blocks: {}",
+                        convert_error(i, ve)
+                    );
+                    panic!("Aborting due to unparseable input")
+                }
             }
-            // TODO: "finish" to make sure we didn't just stop on a malformed block
         }
         _ => panic!("This should be impossible"),
     }

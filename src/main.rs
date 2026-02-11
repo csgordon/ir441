@@ -8,6 +8,7 @@ use std::io::{self, BufReader};
 use std::path::Path;
 
 use nom::Finish;
+use nom::error::convert_error;
 use std::str::from_utf8;
 
 use crate::ir441::exec::*;
@@ -69,7 +70,7 @@ fn check_warnings(prog: &IRProgram) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cmd = std::env::args()
         .nth(1)
-        .expect("need subcommand [check|exec|trace|perf]");
+        .expect("need subcommand [check|exec|trace|perf|memtrace]");
     let txt = std::env::args().nth(2);
     let mut reader: Box<dyn BufRead> = match txt {
         None => Box::new(BufReader::new(io::stdin())),
@@ -85,9 +86,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut bytes: Vec<u8> = vec![];
     reader.read_to_end(&mut bytes)?;
-    let (_leftover, prog) = parse_program(&bytes[..])
-        .finish()
-        .map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
+    let inputstr = from_utf8(&bytes[..])?;
+    let parse_attempt = parse_program(inputstr).finish();
+    if let Err(ve) = parse_attempt {
+        eprintln!("Parse failure:\n{}", convert_error(inputstr, ve));
+        panic!("Aborting due to parsing failure.")
+    }
+    let (_leftover, prog) = parse_attempt.unwrap();
+
     let cmd_str = cmd.as_str();
 
     let mut cycles = ExecStats::new();
@@ -98,20 +104,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if cmd_str == "exec" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        let _fresult = run_prog(&prog, false, false, &mut cycles, ExecMode::Unlimited);
     } else if cmd_str == "exec-fixedmem" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, true, &mut cycles, ExecMode::MemCap { limit: 100 });
+        let _fresult = run_prog(
+            &prog,
+            true,
+            false,
+            &mut cycles,
+            ExecMode::MemCap { limit: 100 },
+        );
     } else if cmd_str == "exec-gc" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _fresult = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let _fresult = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
     } else if cmd_str == "exec-gc-logging" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
         let _fresult = run_prog(
             &prog,
+            false,
             false,
             &mut cycles,
             ExecMode::LoggingGC { limit: 100 },
@@ -119,18 +138,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if cmd_str == "trace" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, true, &mut cycles, ExecMode::Unlimited);
+        let _ = run_prog(&prog, true, false, &mut cycles, ExecMode::Unlimited);
+    } else if cmd_str == "memtrace" {
+        println!("Parsed: {}", prog);
+        check_warnings(&prog);
+        let _ = run_prog(&prog, false, true, &mut cycles, ExecMode::Unlimited);
     } else if cmd_str == "perf" {
         println!("Parsed: {}", prog);
         check_warnings(&prog);
-        let _ = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        let _ = run_prog(&prog, false, false, &mut cycles, ExecMode::Unlimited);
         println!("Execution stats:\n{:?}", cycles);
     } else {
         println!(
             "Unsupported command (possibly not-yet-implemented): {}",
             cmd
         );
-        panic!("Usage: ir441 (check|exec|exec-fixedmem|exec-gc|exec-gc-logging|trace|perf)");
+        panic!(
+            "Usage: ir441 (check|exec|exec-fixedmem|exec-gc|exec-gc-logging|trace|perf|memtrace)"
+        );
     }
 
     Ok(())
@@ -158,25 +183,26 @@ mod systests {
         reader.read_to_end(&mut bytes)?;
         Ok(bytes)
     }
-    fn parse(bytes: &Vec<u8>) -> Result<IRProgram, Box<dyn std::error::Error>> {
+    fn parse_for_test<'a>(bytes: &'a [u8]) -> Result<IRProgram<'a>, Box<dyn std::error::Error>> {
+        let bytes = from_utf8(bytes).unwrap();
         let (_leftover, prog) = parse_program(&bytes[..])
             .finish()
-            .map_err(|nom::error::Error { input, code: _ }| from_utf8(input).unwrap())?;
+            .map_err(|nom::error::VerboseError { errors }| errors[0].0)?;
         Ok(prog)
     }
     #[test]
     fn check_trivial() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/trivial.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes[..])?;
         let mut cycles = ExecStats::new();
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        let result = run_prog(&prog, false, false, &mut cycles, ExecMode::Unlimited);
         assert_eq!(result, Ok(VirtualVal::Data { val: 23 }));
         Ok(())
     }
     #[test]
     fn check_countdown() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/countdown.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -190,14 +216,14 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        let result = run_prog(&prog, false, false, &mut cycles, ExecMode::Unlimited);
         assert_eq!(result, Ok(VirtualVal::Data { val: 0 }));
         Ok(())
     }
     #[test]
     fn check_basicoo() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/basicoo.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -211,14 +237,14 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::Unlimited);
+        let result = run_prog(&prog, false, false, &mut cycles, ExecMode::Unlimited);
         assert_eq!(result, Ok(VirtualVal::Data { val: 3 }));
         Ok(())
     }
     #[test]
     fn check_gctest1() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/gctest1.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -232,14 +258,20 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let result = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
         assert_eq!(result, Ok(VirtualVal::Data { val: 0 }));
         Ok(())
     }
     #[test]
     fn check_gctest2() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/gctest2.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -253,14 +285,20 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let result = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
         assert_eq!(result, Ok(VirtualVal::Data { val: 0 }));
         Ok(())
     }
     #[test]
     fn check_gctest3() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/gctest3.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -274,14 +312,20 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let result = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
         assert_eq!(result, Ok(VirtualVal::Data { val: 4096 }));
         Ok(())
     }
     #[test]
     fn check_gctest4() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/gctest4.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -295,14 +339,20 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let result = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
         assert_eq!(result, Ok(VirtualVal::Data { val: 4096 }));
         Ok(())
     }
     #[test]
     fn check_gctest5() -> Result<(), Box<dyn std::error::Error>> {
         let bytes = load_program("examples/gctest5.ir")?;
-        let prog = parse(&bytes)?;
+        let prog = parse_for_test(&bytes)?;
         let mut cycles = ExecStats {
             allocs: 0,
             calls: 0,
@@ -316,7 +366,13 @@ mod systests {
             prints: 0,
             rets: 0,
         };
-        let result = run_prog(&prog, false, &mut cycles, ExecMode::GC { limit: 100 });
+        let result = run_prog(
+            &prog,
+            false,
+            false,
+            &mut cycles,
+            ExecMode::GC { limit: 100 },
+        );
         assert_eq!(result, Ok(VirtualVal::Data { val: 4096 }));
         Ok(())
     }
