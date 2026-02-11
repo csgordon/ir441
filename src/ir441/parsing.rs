@@ -476,28 +476,97 @@ pub fn parse_array_body(i: &str) -> IResult<&str, Vec<VirtualVal>, VerboseError<
 }
 pub fn parse_global(i: &str) -> IResult<&str, GlobalStatic, VerboseError<&str>> {
     // TODO: rewrite using cut with context after the 'global' keyword for better parsing errors
-    tuple((
+    let (i, _) = multispace0(i)?;
+    let (i, kwd) = alt((tag::<&str, &str, VerboseError<_>>("global"), tag("debug")))(i)?;
+    if kwd == "global" {
+        cut(context(
+            "Expecting global array:",
+            tuple((
+                tuple((
+                    multispace1,
+                    cut(context("Expecting 'array' keyword:", tag("array"))),
+                    multispace0,
+                )),
+                cut(context("Expecting global identifier name", identifier)),
+                tuple((multispace0, tag(":"), multispace0, tag("{"))),
+                parse_array_body,
+                multispace0,
+            )),
+        ))(i)
+        .map(|(rest, (_, name, _, vs, _))| {
+            (
+                rest,
+                GlobalStatic::Array {
+                    name: name,
+                    vals: vs,
+                },
+            )
+        })
+    } else if kwd == "debug" {
+        cut(context("Expecting debug declaration:", parse_debug_info))(i)
+    } else {
+        // Not a global
+        panic!()
+    }
+}
+pub fn parse_debug_info(i: &str) -> IResult<&str, GlobalStatic, VerboseError<&str>> {
+    // This combinator is only called after the 'debug' keyword is matched in the data section
+    let (info, ((_, kwd, _), _)) = tuple((
         tuple((
-            multispace0,
-            tag("global"),
             multispace1,
-            tag("array"),
+            cut(context(
+                "Expecting 'fieldnames' or 'classinfo' keyword:",
+                alt((tag("fieldnames"), tag("classinfo"))),
+            )),
             multispace0,
         )),
-        identifier,
-        tuple((multispace0, tag(":"), multispace0, tag("{"))),
-        parse_array_body,
-        multispace0,
-    ))(i)
-    .map(|(rest, (_, name, _, vs, _))| {
-        (
-            rest,
-            GlobalStatic::Array {
-                name: name,
-                vals: vs,
-            },
-        )
-    })
+        tuple((multispace0, tag(":"), multispace0, tag("{"), multispace0)),
+    ))(i)?;
+    if kwd == "fieldnames" {
+        // Parse a sequence of unquoted strings, followed by a closing brace
+        cut(context(
+            "Expected array of field names",
+            tuple((
+                separated_list0(tuple((multispace0, tag(","), multispace0)), identifier),
+                multispace0,
+                tag("}"),
+                multispace0,
+            )),
+        ))(info)
+        .map(|(rest, (ids, _, _, _))| (rest, GlobalStatic::DebugFieldNames { names: ids }))
+    } else {
+        // was "classinfo"
+        // Parse a sequence of triples (<class name>, <vtbl name>, <field map name>)
+        cut(context(
+            "Expected flag list of class name, vtable, fieldmap triples",
+            tuple((
+                separated_list0(
+                    tuple((multispace0, tag(","), multispace0)),
+                    tuple((
+                        identifier,
+                        multispace0,
+                        tag(","),
+                        multispace0,
+                        identifier,
+                        multispace0,
+                        tag(","),
+                        multispace0,
+                        identifier,
+                    )),
+                ),
+                multispace0,
+                tag("}"),
+                multispace0,
+            )),
+        ))(info)
+        .map(|(rest, (paddedtriples, _, _, _))| {
+            let mut triples = vec![];
+            for (a, _, _, _, b, _, _, _, c) in paddedtriples {
+                triples.push((a, b, c));
+            }
+            (rest, GlobalStatic::DebugClassMeta { classinfo: triples })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -960,6 +1029,33 @@ mod parsing_tests {
                 GlobalStatic::Array {
                     name: "vtblA",
                     vals: vec![VirtualVal::CodePtr { val: "mA" }]
+                }
+            ))
+        );
+        assert_eq!(
+            parse_global("debug fieldnames: { x, y, foo }\n"),
+            Ok((
+                empty,
+                GlobalStatic::DebugFieldNames {
+                    names: vec!["x", "y", "foo"]
+                }
+            ))
+        );
+        assert_eq!(
+            parse_global("debug fieldnames: { x,y , foo }\n"),
+            Ok((
+                empty,
+                GlobalStatic::DebugFieldNames {
+                    names: vec!["x", "y", "foo"]
+                }
+            ))
+        );
+        assert_eq!(
+            parse_global("debug classinfo : { Foo, vtblFoo,fieldsFoo }\n"),
+            Ok((
+                empty,
+                GlobalStatic::DebugClassMeta {
+                    classinfo: vec![("Foo", "vtblFoo", "fieldsFoo")]
                 }
             ))
         );

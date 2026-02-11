@@ -111,6 +111,10 @@ struct Memory<'a> {
     /// Allocated object addresses, used to filter GC roots without a stack map.
     /// This does result in semi-conservative GC since we can occasionally mistake an int for a valid pointer, but it's unlikely to persist beyond a single GC cycle.
     allocations: HashSet<u64>,
+    /// Optional debug information tracking field names for each offset
+    fieldnames: Option<Vec<&'a str>>,
+    /// Optional class table information
+    classmeta: Option<Vec<(&'a str, &'a str, &'a str)>>,
 }
 type Locals<'a> = HashMap<&'a str, VirtualVal<'a>>;
 type Globals<'a> = HashMap<&'a str, u64>;
@@ -121,13 +125,27 @@ impl<'a> Memory<'a> {
         let mut next_free: u64 = 32;
         let mut m: BTreeMap<u64, VirtualVal<'a>> = BTreeMap::new();
         let mut globs: Globals = HashMap::new();
+        let mut classdata: Option<Vec<(&str, &str, &str)>> = None;
+        let mut fieldinfo: Option<Vec<&str>> = None;
 
         for g in prog.globals.iter() {
-            let GlobalStatic::Array { name: n, vals: vs } = g;
-            globs.insert(n, next_free);
-            for v in vs.iter() {
-                m.insert(next_free, v.clone());
-                next_free = next_free + 8;
+            match g {
+                GlobalStatic::Array { name: n, vals: vs } => {
+                    if *n == "_" {
+                        panic!("Globals may not be named '_'")
+                    }
+                    globs.insert(n, next_free);
+                    for v in vs.iter() {
+                        m.insert(next_free, v.clone());
+                        next_free = next_free + 8;
+                    }
+                }
+                GlobalStatic::DebugFieldNames { names } => {
+                    fieldinfo = Some((*names).clone());
+                }
+                GlobalStatic::DebugClassMeta { classinfo } => {
+                    classdata = Some((*classinfo).clone());
+                }
             }
         }
 
@@ -139,6 +157,8 @@ impl<'a> Memory<'a> {
             slot_cap,
             slots_alloced: 0,
             allocations: HashSet::new(),
+            classmeta: classdata,
+            fieldnames: fieldinfo,
         };
         (mem, globs)
     }
@@ -399,9 +419,55 @@ impl<'a> Memory<'a> {
         for (name, addr) in globs.iter() {
             println!("\t@{} -> {}", name, addr)
         }
+
+        // Build type information
+        let mut offset_to_field: HashMap<usize, &str> = HashMap::new();
+        if let Some(fieldnames) = &self.fieldnames {
+            for (off, fname) in fieldnames.iter().enumerate() {
+                offset_to_field.insert(off, *fname);
+            }
+        }
+        let mut classinfo = HashMap::new();
+        if let Some(classdata) = &self.classmeta {
+            for (cname, vtname, fmname) in classdata {
+                if let Some(vtable_addr) = globs.get(*vtname) {
+                    // Found the vtable. May or may not have a field map.
+                    let mut offsetmap = None;
+                    if *fmname != "_" {
+                        let mut map = HashMap::new();
+                        // TODO: Restructure the global representation as a map instead of a vector
+                        for g in &_prog.globals {
+                            if let GlobalStatic::Array { name, vals } = g
+                                && *name == *fmname
+                            {
+                                for (index, field_offset) in vals.iter().enumerate() {
+                                    if field_offset.as_u64().unwrap() != 0 {
+                                        map.insert(
+                                            field_offset.as_u64().unwrap(),
+                                            offset_to_field.get(&index).unwrap(),
+                                        );
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        offsetmap = Some(map);
+                    }
+                    classinfo.insert(*vtable_addr, (*cname, offsetmap));
+                } else {
+                    eprintln!(
+                        "Warning: Could not find vtable named {} to match debug info for class {}",
+                        *vtname, *cname
+                    );
+                }
+            }
+        }
+
         println!("Memory Contents:");
         let mut split_globals = false;
         let mut split_gcspace = false;
+        let mut last_object_base: u64 = 0;
+        let mut last_object_field_info = &None;
         for (addr, val) in self.map.iter() {
             if !split_globals && *addr > self.first_writable {
                 println!("\t---------------- <end of globals, start of mutable memory>");
@@ -413,7 +479,26 @@ impl<'a> Memory<'a> {
                 );
                 split_gcspace = true;
             }
-            println!("\t{}: {}", addr, val);
+            // TODO: Extend to do more than label classes
+            if let VirtualVal::Data { val: v } = val
+                && let Some((cname, finfo)) = classinfo.get(v)
+            {
+                println!(
+                    "\t{}: {}\t(Object header for class '{}')",
+                    addr, val, *cname
+                );
+                last_object_base = *v;
+                last_object_field_info = finfo;
+            } else if let VirtualVal::Data { val: v } = val
+                && let Some(reverse_fmap) = last_object_field_info
+                && let Some(&fname) = reverse_fmap.get(&(addr - last_object_base))
+            {
+                // Not an object header, but we have current object info and the field name
+                println!("\t{}: {}\t(.{})", addr, val, *fname);
+            } else {
+                // No class info for this
+                println!("\t{}: {}", addr, val);
+            }
         }
     }
 }

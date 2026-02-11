@@ -19,6 +19,12 @@ impl<'a> fmt::Display for VirtualVal<'a> {
     }
 }
 impl<'a> VirtualVal<'a> {
+    pub fn as_u64(&self) -> Option<u64> {
+        match *self {
+            VirtualVal::Data { val } => Some(val),
+            _ => None,
+        }
+    }
     pub fn as_u64_or_else<E, F>(&self, f: F) -> Result<u64, E>
     where
         F: FnOnce(&VirtualVal<'a>) -> E,
@@ -257,6 +263,12 @@ pub enum GlobalStatic<'a> {
     Array {
         name: &'a str,
         vals: Vec<VirtualVal<'a>>,
+    },
+    DebugFieldNames {
+        names: Vec<&'a str>,
+    },
+    DebugClassMeta {
+        classinfo: Vec<(&'a str, &'a str, &'a str)>,
     },
 }
 
