@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use crate::ir441::nodes::*;
 
@@ -416,9 +416,12 @@ impl<'a> Memory<'a> {
 
     fn print(&self, _prog: &'a IRProgram, globs: &'a Globals<'a>) {
         println!("Global Addresses:");
+        let mut global_allocs_map = BTreeMap::new();
         for (name, addr) in globs.iter() {
-            println!("\t@{} -> {}", name, addr)
+            println!("\t@{} -> {}", name, addr);
+            global_allocs_map.insert(*addr, *name);
         }
+        let mut global_allocs: VecDeque<&str> = global_allocs_map.into_values().collect();
 
         // Build type information
         let mut offset_to_field: HashMap<usize, &str> = HashMap::new();
@@ -453,7 +456,7 @@ impl<'a> Memory<'a> {
                         }
                         offsetmap = Some(map);
                     }
-                    classinfo.insert(*vtable_addr, (*cname, offsetmap));
+                    classinfo.insert(*vtable_addr, (*cname, offsetmap, *fmname));
                 } else {
                     eprintln!(
                         "Warning: Could not find vtable named {} to match debug info for class {}",
@@ -468,6 +471,7 @@ impl<'a> Memory<'a> {
         let mut split_gcspace = false;
         let mut last_object_base: u64 = 0;
         let mut last_object_field_info = &None;
+        let mut last_object_fmap_name = None;
         for (addr, val) in self.map.iter() {
             if !split_globals && *addr > self.first_writable {
                 println!("\t---------------- <end of globals, start of mutable memory>");
@@ -479,25 +483,91 @@ impl<'a> Memory<'a> {
                 );
                 split_gcspace = true;
             }
-            // TODO: Extend to do more than label classes
-            if let VirtualVal::Data { val: v } = val
-                && let Some((cname, finfo)) = classinfo.get(v)
+
+            let valwidth: usize = 20; // TODO: calculate based on longest block name
+
+            // Printing cells of the last global, the vecdeque is empty
+            if *addr <= self.first_writable && global_allocs.len() > 0 {
+                if let Some(v) = globs.get(global_allocs.get(0).unwrap())
+                    && *v == *addr
+                {
+                    println!("    Start of global '{}'", global_allocs.get(0).unwrap());
+                    global_allocs.pop_front();
+                }
+            }
+
+            // Note: We pre-format! the value so that printf's alignment works --- alignment is apparently a property
+            // of the type being formatted, so by converting to a string first we ensure we can align
+            if let VirtualVal::CodePtr { .. } = val {
+                println!(
+                    "\t{}: {:.>valwidth$}\t(Block/code pointer)",
+                    addr,
+                    format!("{}", val)
+                );
+            } else if let VirtualVal::Data { val: v } = val
+                && let Some((cname, finfo, fmname)) = classinfo.get(v)
             {
                 println!(
-                    "\t{}: {}\t(Object header for class '{}')",
-                    addr, val, *cname
+                    "\t{}: {:.>valwidth$}\t(Object header for class '{}')",
+                    addr,
+                    format!("{}", val),
+                    *cname
                 );
-                last_object_base = *v;
+                last_object_base = *addr;
                 last_object_field_info = finfo;
+                last_object_fmap_name = Some(*fmname);
+            } else if let VirtualVal::Data { val: v } = val
+                && last_object_base == *addr - 8
+            {
+                if let Some(fmname) = last_object_fmap_name {
+                    // If running with field maps, this is the fieldmap.
+                    if fmname == "_" {
+                        // No field map, print normally
+                        println!("\t{}: {:.>valwidth$}", addr, format!("{}", val));
+                    } else {
+                        // Field maps exist
+                        if let Some(fmap_addr) = globs.get(fmname)
+                            && fmap_addr == v
+                        {
+                            println!(
+                                "\t{}: {:.>valwidth$}\t(field map {})",
+                                addr,
+                                format!("{}", val),
+                                fmname
+                            );
+                        } else {
+                            println!(
+                                "\t{}: {:.>valwidth$}\t(*should* be field map {}, but appears corrupted)",
+                                addr,
+                                format!("{}", val),
+                                fmname
+                            );
+                        }
+                    }
+                } else {
+                    panic!(
+                        "Inconsistent data structures: empty last_object_fmap_name despite non-trivial last_object_base {}",
+                        last_object_base
+                    );
+                }
             } else if let VirtualVal::Data { val: v } = val
                 && let Some(reverse_fmap) = last_object_field_info
-                && let Some(&fname) = reverse_fmap.get(&(addr - last_object_base))
+                && let Some(&fname) = reverse_fmap.get(&((addr - last_object_base) / 8))
             {
                 // Not an object header, but we have current object info and the field name
-                println!("\t{}: {}\t(.{})", addr, val, *fname);
+                println!(
+                    "\t{}: {:.>valwidth$}\t(.{})",
+                    addr,
+                    format!("{}", val),
+                    *fname
+                );
             } else {
                 // No class info for this
-                println!("\t{}: {}", addr, val);
+                println!(
+                    "\t{}: {:.>valwidth$}\t(No debugging info available!)",
+                    addr,
+                    format!("{}", val)
+                );
             }
         }
     }
