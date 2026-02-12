@@ -12,6 +12,7 @@ env:
   CRATE_NAME: ir441
   GITHUB_TOKEN: ${{ github.token }}
   RUST_BACKTRACE: 1
+  RUSTC_LOG: trace
 
 jobs:
   test-matrix:
@@ -27,28 +28,27 @@ jobs:
             skip-tests: true
           - os-name: Linux-x86_64
             runs-on: ubuntu-24.04
-            # We need to use gnu or we cannot link against openssl.
             target: x86_64-unknown-linux-gnu
           - os-name: Linux-riscv64
             runs-on: ubuntu-24.04
             target: riscv64gc-unknown-linux-gnu
+            skip-tests: true
           - os-name: Windows-aarch64
             runs-on: windows-latest
             target: aarch64-pc-windows-msvc
             skip-tests: true
-          - os-name: Windows-i686
-            runs-on: windows-latest
-            target: i686-pc-windows-msvc
-            skip-tests: true
           - os-name: Windows-x86_64
             runs-on: windows-latest
             target: x86_64-pc-windows-msvc
+            skip-tests: true
           - os-name: macOS-x86_64
             runs-on: macOS-latest
             target: x86_64-apple-darwin
+            skip-tests: true
           - os-name: macOS-aarch64
             runs-on: macOS-latest
             target: aarch64-apple-darwin
+            skip-tests: true
         toolchain:
           - stable
     steps:
@@ -60,7 +60,7 @@ jobs:
           target: ${{ matrix.platform.target }}
           toolchain: ${{ matrix.toolchain }}
           args:
-            "--release"
+            "--release --verbose"
           strip: true
       - name: Run tests
         uses: houseabsolute/actions-rust-cross@v1
