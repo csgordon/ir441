@@ -73,6 +73,7 @@ jobs:
         if: ${{ !matrix.platform.skip-tests }}
       - name: Record where binaries are
         run: find . -name '*ir441*'
+        if: runner.os != 'Windows'
       - name: Publish artifacts and release
         uses: houseabsolute/actions-rust-release@v0
         with:
