@@ -1,6 +1,6 @@
 [package]
 name = "ir441"
-version = "2.2.2"
+version = "2.2.3"
 authors = ["Colin S. Gordon <csgordon@drexel.edu>"]
 edition = "2024"
 
